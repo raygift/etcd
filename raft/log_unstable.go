@@ -25,20 +25,31 @@ type unstable struct {
 	snapshot *pb.Snapshot
 	// all entries that have not yet been written to storage.
 	entries []pb.Entry
-	offset  uint64
+	offset  uint64 //snapshot 之后的首条日志（在raftlog 中）的index
 
 	logger Logger
 }
 
+// 尝试根据unstable 的snapshot 推断出 raftLog 的第一条日志index
+// 当存在unstable.snapshot 时，实际正处于 restore snapshot 之后，stableSnapTo 之前
+// 因为 unstable 中保存的 snapshot 未来会被执行ApplySnapshot()，从unstable 转移到 storage.snapshot
+// 而无论是否执行了ApplySnapshot()，可以确定raftLog 对应的storage 中保存的日志一定是从快照之后开始，因为快照中包含的日志不会再从leader 复制到follower
 // maybeFirstIndex returns the index of the first possible entry in entries
 // if it has a snapshot.
 func (u *unstable) maybeFirstIndex() (uint64, bool) {
 	if u.snapshot != nil {
+		// unstable.snapshot 是接收到来自leader 发送来的snapshot
+		// Metadata.Index 是leader 在调用(ms *MemoryStorage) CreateSnapshot 时传入的index
+		// 因此返回 Storage 首个日志的index +1，表示快照之后的首条日志的索引号，所有follower 都需要与raft leader 保持一致
 		return u.snapshot.Metadata.Index + 1, true
 	}
 	return 0, false
 }
 
+// 当存在unstable.entries 时，（不存在 snapshot），只需要检查entries 的最后索引号；
+// 否则，若存在unstable.snapshot，返回 snapshot.Metadata.Index（snapshot 的data 中日志的最大索引号）
+// 若unstable的 entries 和 snapshot 都不存在，则返回0
+// ”maybeLastIndex 在至少存在一个unstable.entry 或存在snapshot时，返回last index“
 // maybeLastIndex returns the last index if it has at least one
 // unstable entry or snapshot.
 func (u *unstable) maybeLastIndex() (uint64, bool) {
@@ -51,25 +62,30 @@ func (u *unstable) maybeLastIndex() (uint64, bool) {
 	return 0, false
 }
 
+// 检查在unstable 中索引号为i 的日志的term
+// 若 index 大于等于 unstable.offset，则 index 位于。。。
 // maybeTerm returns the term of the entry at index i, if there
 // is any.
 func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
-	if i < u.offset {
-		if u.snapshot != nil && u.snapshot.Metadata.Index == i {
+	// 若 i 小于 unstable.offset，则 i 位于 unstable.entries 之前；
+	// 此时可能存在unstable.snapshot，snapshot 中保存的entry 尚未应用到unstable.entries 中
+
+	if i < u.offset { // i 位于当前unstable.entries[0] 之前
+		if u.snapshot != nil && u.snapshot.Metadata.Index == i { //
 			return u.snapshot.Metadata.Term, true
 		}
 		return 0, false
 	}
 
-	last, ok := u.maybeLastIndex()
-	if !ok {
+	last, ok := u.maybeLastIndex() // 获得unstable 中最大的索引号
+	if !ok {                       // 不存在unstable.entries 和snapshot
 		return 0, false
 	}
-	if i > last {
+	if i > last { // i 大于 unstable.entries 或unstable.snapshot 的last index
 		return 0, false
 	}
 
-	return u.entries[i-u.offset].Term, true
+	return u.entries[i-u.offset].Term, true // 从unstable 中获得 index 的term
 }
 
 func (u *unstable) stableTo(i, t uint64) {
@@ -112,20 +128,26 @@ func (u *unstable) stableSnapTo(i uint64) {
 	}
 }
 
+// 更新 unstable.offset，清空 unstable.entries，保存snapshot
 func (u *unstable) restore(s pb.Snapshot) {
-	u.offset = s.Metadata.Index + 1
+	u.offset = s.Metadata.Index + 1 // snapshot 之后的首条日志（在raftlog 中）的index
 	u.entries = nil
 	u.snapshot = &s
 }
 
+// 判断传入的ents 所包含的日志与unstable 中entries 所持有日志的位置关系
+// 若传入的首条记录index 正好是unstable.entries 下一个index，则直接将ents 追加到unstable.entries中
+// 若传入的首条记录index 小于等于unsatble 中的首条记录，则将原来已有的未提交记录覆盖
+// -- 在进入truncateAndAppend 之前已经判断了 ents[0].index >= commited+1，因此此处当 ents[0].index <=offset 时，[ents[0].index, 当前offset]区间内都是未提交记录，可以被覆盖，覆盖后offset 向前缩小了，因此要更新
+// 若传入的首条记录的index 大于 offset，[offset，ents[0].index]之间的记录覆盖
 func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 	after := ents[0].Index
 	switch {
-	case after == u.offset+uint64(len(u.entries)):
+	case after == u.offset+uint64(len(u.entries)): // offset 是相对于 RaftLog 首条记录的偏移量，等式后半部分表示 unstable.entries 的后一条日志的索引号
 		// after is the next index in the u.entries
 		// directly append
-		u.entries = append(u.entries, ents...)
-	case after <= u.offset:
+		u.entries = append(u.entries, ents...) // 需要append 的日志正好位于 unstable.entries 之后，两部分无缝拼接即可
+	case after <= u.offset: // 传入的日志在RaftLog 中的位置 比unstable.entries 都要靠前，则舍弃当前unstable.entries，将传入日志作为新的unstable.entries，并更新 offset值
 		u.logger.Infof("replace the unstable entries from index %d", after)
 		// The log is being truncated to before our current offset
 		// portion, so set the offset and replace the entries
@@ -134,7 +156,7 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 	default:
 		// truncate to after and copy to u.entries
 		// then append
-		u.logger.Infof("truncate the unstable entries before index %d", after)
+		u.logger.Infof("truncate the unstable entries before index %d", after) // 传入的日志与unstable.entries 的日志有重叠，重叠部分以传入的日志为准进行更新
 		u.entries = append([]pb.Entry{}, u.slice(u.offset, after)...)
 		u.entries = append(u.entries, ents...)
 	}

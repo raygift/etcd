@@ -59,6 +59,8 @@ type Storage interface {
 	Term(i uint64) (uint64, error)
 	// LastIndex returns the index of the last entry in the log.
 	LastIndex() (uint64, error)
+	// FirstIndex() 返回第一个非dummy entry。
+	// 若只存在dummy entry，则 首条日志记录不可用
 	// FirstIndex returns the index of the first log entry that is
 	// possibly available via Entries (older entries have been incorporated
 	// into the latest Snapshot; if storage only contains the dummy entry the
@@ -82,6 +84,8 @@ type MemoryStorage struct {
 	hardState pb.HardState
 	snapshot  pb.Snapshot
 	// ents[i] has raft log position i+snapshot.Metadata.Index
+	// ents[0] 记录的是最新被apply 的snapshot 的 Metadata 中记录的 index和term
+	// ents[0] 就是所谓的dummy entry
 	ents []pb.Entry
 }
 
@@ -89,7 +93,7 @@ type MemoryStorage struct {
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
 		// When starting from scratch populate the list with a dummy entry at term zero.
-		ents: make([]pb.Entry, 1),
+		ents: make([]pb.Entry, 1), // 最初创建一个storage 时，因为没有apply 过任何snapshot，dummy entry 记录的index 和term 均为0
 	}
 }
 
@@ -169,24 +173,30 @@ func (ms *MemoryStorage) Snapshot() (pb.Snapshot, error) {
 	return ms.snapshot, nil
 }
 
+// 将入参 snap 保存到raftLog 的storage，并将storage 成员变量ents 赋值为仅包含一个dummy entry
 // ApplySnapshot overwrites the contents of this Storage object with
 // those of the given snapshot.
 func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 	ms.Lock()
 	defer ms.Unlock()
-
+	// 若传入的snapshot 的index 小于当前 storage 中保存的snapshot 的index，则判断传入的是旧快照
 	//handle check for old snapshot being applied
 	msIndex := ms.snapshot.Metadata.Index
 	snapIndex := snap.Metadata.Index
 	if msIndex >= snapIndex {
 		return ErrSnapOutOfDate
 	}
-
+	// 将storage.snapshot 更新为最新apply 的快照
+	// storage.ents 记录
 	ms.snapshot = snap
 	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}}
 	return nil
 }
 
+// 调用 etcd raft 的上层应用会实现snapshot 的data 数据准备
+// raft 只需要实现 snapshot 元数据的存储，用以描述该snapshot；
+// 待 data 和 元数据准备好之后，上层应用实现了snapshot 的持久化存储，随后调用 Compact()
+//
 // CreateSnapshot makes a snapshot which can be retrieved with Snapshot() and
 // can be used to reconstruct the state at that point.
 // If any configuration changes have been made since the last compaction,
@@ -194,44 +204,48 @@ func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte) (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
-	if i <= ms.snapshot.Metadata.Index {
-		return pb.Snapshot{}, ErrSnapOutOfDate
+	if i <= ms.snapshot.Metadata.Index { // 如果传入的index 小于已有快照的index，直接返回错误
+		return pb.Snapshot{}, ErrSnapOutOfDate //requested index is older than the existing snapshot
 	}
 
-	offset := ms.ents[0].Index
-	if i > ms.lastIndex() {
+	offset := ms.ents[0].Index // offset 记录ms 中entries 的首条记录的index，此记录之前的所有记录已经被截断
+	if i > ms.lastIndex() {    // 若i 超过ms 中最后一条记录的index，抛出异常
 		getLogger().Panicf("snapshot %d is out of bound lastindex(%d)", i, ms.lastIndex())
 	}
 
-	ms.snapshot.Metadata.Index = i
-	ms.snapshot.Metadata.Term = ms.ents[i-offset].Term
+	ms.snapshot.Metadata.Index = i                     // snapshot.Metadata.Index 记录的是创建snapshot 时传入的index，快照data中保存的是此index 之前的日志
+	ms.snapshot.Metadata.Term = ms.ents[i-offset].Term // 定位到 index 为i 的记录，获得其term 号
 	if cs != nil {
-		ms.snapshot.Metadata.ConfState = *cs
+		ms.snapshot.Metadata.ConfState = *cs // 如有配置变更
 	}
-	ms.snapshot.Data = data
+	ms.snapshot.Data = data // 存储传入的data
 	return ms.snapshot, nil
 }
 
+// 何时被调用？上层在准备好快照 data ，并拿到经CreateSnapshot 得到的快照元数据之后，完成快照的持久化；
+// 随后便可调用 Compact，将已经被生成为快照并持久化的记录删除，从而达到回收日志占用的存储空间的目的。
+// 日志压缩，将 compactIndex 之前的所有日志记录截断，需要调用Compact() 的上层应用保证不将未applied 的记录截断
 // Compact discards all log entries prior to compactIndex.
 // It is the application's responsibility to not attempt to compact an index
 // greater than raftLog.applied.
 func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	ms.Lock()
 	defer ms.Unlock()
-	offset := ms.ents[0].Index
-	if compactIndex <= offset {
+	offset := ms.ents[0].Index  // offset 为最近一次snapshot 被apply 之后的.metadata.index
+	if compactIndex <= offset { // 要截断的index 小于等于 首条记录的index，则其前一条记录已经存在于上次的快照中，本次操作无需再次截断
 		return ErrCompacted
 	}
-	if compactIndex > ms.lastIndex() {
+	if compactIndex > ms.lastIndex() { // 要截断的index 非法，抛出异常
 		getLogger().Panicf("compact %d is out of bound lastindex(%d)", compactIndex, ms.lastIndex())
 	}
-
-	i := compactIndex - offset
-	ents := make([]pb.Entry, 1, 1+uint64(len(ms.ents))-i)
-	ents[0].Index = ms.ents[i].Index
+	// ----｜---｜--------
+	// snap|
+	i := compactIndex - offset                            // i 为要截断的记录长度
+	ents := make([]pb.Entry, 1, 1+uint64(len(ms.ents))-i) // ents 的cap 为截断i个记录后ms entries 数组的长度+1
+	ents[0].Index = ms.ents[i].Index                      // 截断后首条记录的index 为i
 	ents[0].Term = ms.ents[i].Term
-	ents = append(ents, ms.ents[i+1:]...)
-	ms.ents = ents
+	ents = append(ents, ms.ents[i+1:]...) // 向entries 中追加i 之后的剩余记录
+	ms.ents = ents                        // ms entries 中的记录最终为[i, i+1..., nil]
 	return nil
 }
 

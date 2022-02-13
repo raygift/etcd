@@ -222,19 +222,21 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// gofail: var raftBeforeLeaderSend struct{}
 					r.transport.Send(r.processMessages(rd.Messages))
 				}
-
+				// 在保存任何其他 entries 或 hardstate 之前，必须先保存snapshot 文件并向WAL 中增加一条snapshotType 类型的记录
+				// 从而保证在 snapshot restore 后可以完成 recovery
+				// （个人理解：第一时间先保存snapshot 文件，避免拿到snapshot 后的crash 导致快照丢失，无法从快照重新恢复的问题）
 				// Must save the snapshot file and WAL snapshot entry before saving any other entries or hardstate to
 				// ensure that recovery after a snapshot restore is possible.
 				if !raft.IsEmptySnap(rd.Snapshot) {
 					// gofail: var raftBeforeSaveSnap struct{}
-					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
+					if err := r.storage.SaveSnap(rd.Snapshot); err != nil { // 保存snapshot 文件，WAL 中增加 snapshotType 类型记录
 						r.lg.Fatal("failed to save Raft snapshot", zap.Error(err))
 					}
 					// gofail: var raftAfterSaveSnap struct{}
 				}
-
+				// 保存 HardState
 				// gofail: var raftBeforeSave struct{}
-				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
+				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil { // 向 WAL 中逐条写入 entries，并写入HardState
 					r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 				}
 				if !raft.IsEmptyHardState(rd.HardState) {
@@ -250,7 +252,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					if err := r.storage.Sync(); err != nil {
 						r.lg.Fatal("failed to sync Raft snapshot", zap.Error(err))
 					}
-
+					// 通知等待snapshot 落盘的协程
 					// etcdserver now claim the snapshot has been persisted onto the disk
 					notifyc <- struct{}{}
 

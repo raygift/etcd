@@ -83,18 +83,22 @@ func (l *raftLog) String() string {
 	return fmt.Sprintf("committed=%d, applied=%d, unstable.offset=%d, len(unstable.Entries)=%d", l.committed, l.applied, l.unstable.offset, len(l.unstable.entries))
 }
 
-// maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
+// MaybeAppend 只用在 handleAppendEntries() 时，用来判断传入的 m.entries 是否可以被append
+// 若传入的 m.Index 和 m.LogTerm 与RaftLog 中对应 [index,term] 存在冲突，则无需判断 m.Entries，直接返回false，表示无法append
+// 否则，判断传入的 m.Entries 与 RaftLog// maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
 // it returns (last index of new entries, true).
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
-	if l.matchTerm(index, logTerm) {
-		lastnewi = index + uint64(len(ents))
+	// 首先判断传入的 term 与logTerm 是否与RaftLog 存在冲突；若存在冲突则没有必要继续判断，直接返回false
+	if l.matchTerm(index, logTerm) { // index 参数为 ents 的首条日志的index
+		// 传入的 term 与 logTerm 与RaftLog 不存在冲突，检查可以append 的日志
+		lastnewi = index + uint64(len(ents)) // lastnewi 为传入的ents 的最后一条日志的index
 		ci := l.findConflict(ents)
 		switch {
-		case ci == 0:
-		case ci <= l.committed:
-			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
-		default:
-			offset := index + 1
+		case ci == 0: // 不存在日志冲突，且 RaftLog 中已包含所有传入的ents，无需特殊处理，RaftLog 的 committed 将可能被更新
+		case ci <= l.committed: // 存在冲突，且冲突的位置位于已提交日志之前，违背了Raft 论文中已提交日志不能被修改的安全性约束
+			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed) // 这里一定要 panic 吗？其他网络分区的旧leader 很可能会发送冲突的entries，此时follower 拒绝append 不就可以了？
+		default: // ci 大于已提交日志位置，说明传入的ents 中存在 RaftLog 尚未持有的新日志
+			offset := index + 1 // 为了ci-offset 与ents 中日志位置对应
 			l.append(ents[ci-offset:]...)
 		}
 		l.commitTo(min(committed, lastnewi))
@@ -103,6 +107,10 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 	return 0, false
 }
 
+// 向raft 节点的raftlog 中追加日志记录，实际会将待追加的日志添加到unstable.entries，unstable.entries 中的记录会传递给上层应用，由应用控制将日志写入raft 状态机
+// 若传入的ents 为空，则直接返回当前lastindex
+// 若传入的首条日志索引号小于（已经提交的记录号+1），将被视为非法请求，因此不能覆盖已经提交的记录
+// 否则向 unstable.entries 追加记录；追加时若未完成提交的部分已有记录，则旧记录被覆盖重写
 func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	if len(ents) == 0 {
 		return l.lastIndex()
@@ -208,8 +216,13 @@ func (l *raftLog) snapshot() (pb.Snapshot, error) {
 	return l.storage.Snapshot()
 }
 
+// 由于 Storage 中的日志在上层创建快照时会被Compact 后删除，因此 Storage 中保存的日志是最后一次执行snapshot 之后剩下的日志
+// 由于 unstable 的snapshot 来自作为 raft follower/candidate 时收到leader 复制来的snapshot，调用handleSnapshot()
+// 若存在unstable.snapshot，则 raftLog 中首条日志索引一定是 snapshot.Metadata.Index+1
+// 若 unstable 不存在unstable.snapshto，由于 Storage 中首个日志是dummy entry，而dummy entry 中记录了上一次快照的snapshot.Metadata.Index
+// 		因此返回dummy entry.Index +1
 func (l *raftLog) firstIndex() uint64 {
-	if i, ok := l.unstable.maybeFirstIndex(); ok {
+	if i, ok := l.unstable.maybeFirstIndex(); ok { // 判断是否可以从unstable.snapshot 获得 raftLog 的首条日志索引；若存在unstable.snapshot，则 raftLog 中首条日志索引一定是 snapshot.Metadata.Index+1
 		return i
 	}
 	index, err := l.storage.FirstIndex()
@@ -219,6 +232,9 @@ func (l *raftLog) firstIndex() uint64 {
 	return index
 }
 
+// 若 unstable 存在entries，返回 unstable.entries 最后日志的index；
+// 若 unstable 存在snapshot，返回 unstable.snapshot 快照元数据中的index；
+// 若 unstable 不存在日志和快照，返回 Storage 最后日志的index。
 func (l *raftLog) lastIndex() uint64 {
 	if i, ok := l.unstable.maybeLastIndex(); ok {
 		return i
@@ -262,6 +278,9 @@ func (l *raftLog) lastTerm() uint64 {
 	return t
 }
 
+// 获取索引号为 i 的日志的term
+// 会首先判断 i 的合法性，若index 小于 dummyIndex 或者大于 lastIndex，则不合法
+// 确定索引号合法后，首先在unstable 中
 func (l *raftLog) term(i uint64) (uint64, error) {
 	// the valid term range is [index of dummy entry, last index]
 	dummyIndex := l.firstIndex() - 1
@@ -314,9 +333,13 @@ func (l *raftLog) isUpToDate(lasti, term uint64) bool {
 	return term > l.lastTerm() || (term == l.lastTerm() && lasti >= l.lastIndex())
 }
 
+// 判断 raftLog 中索引 i 位置的日志term 是否与传入的参数term 相同
+// 若索引i 位置的日志已被压缩 或 不可用（分别对应 ErrCompacted ErrUnavailable 错误），则返回false
+// 若索引 i 位置的日志term 与参数不同，返回fasle
+// 否则返回true，表示 raftLog 中索引i 的日志term 与传入参数相同
 func (l *raftLog) matchTerm(i, term uint64) bool {
-	t, err := l.term(i)
-	if err != nil {
+	t, err := l.term(i) // 获取索引 i 位置日志的term
+	if err != nil {     // 若i 位置的日志不可用
 		return false
 	}
 	return t == term

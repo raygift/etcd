@@ -17,6 +17,7 @@ package raft
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"reflect"
@@ -294,17 +295,17 @@ func testLeaderElection(t *testing.T, preVote bool) {
 		state   StateType
 		expTerm uint64
 	}{
-		{newNetworkWithConfig(cfg, nil, nil, nil), StateLeader, 1},
-		{newNetworkWithConfig(cfg, nil, nil, nopStepper), StateLeader, 1},
-		{newNetworkWithConfig(cfg, nil, nopStepper, nopStepper), candState, candTerm},
+		// {newNetworkWithConfig(cfg, nil, nil, nil), StateLeader, 1},
+		// {newNetworkWithConfig(cfg, nil, nil, nopStepper), StateLeader, 1},
+		// {newNetworkWithConfig(cfg, nil, nopStepper, nopStepper), candState, candTerm},
 		{newNetworkWithConfig(cfg, nil, nopStepper, nopStepper, nil), candState, candTerm},
-		{newNetworkWithConfig(cfg, nil, nopStepper, nopStepper, nil, nil), StateLeader, 1},
+		// {newNetworkWithConfig(cfg, nil, nopStepper, nopStepper, nil, nil), StateLeader, 1},
 
 		// three logs further along than 0, but in the same term so rejections
 		// are returned instead of the votes being ignored.
-		{newNetworkWithConfig(cfg,
-			nil, entsWithConfig(cfg, 1), entsWithConfig(cfg, 1), entsWithConfig(cfg, 1, 1), nil),
-			StateFollower, 1},
+		// {newNetworkWithConfig(cfg,
+		// 	nil, entsWithConfig(cfg, 1), entsWithConfig(cfg, 1), entsWithConfig(cfg, 1, 1), nil),
+		// 	StateFollower, 1},
 	}
 
 	for i, tt := range tests {
@@ -315,6 +316,10 @@ func testLeaderElection(t *testing.T, preVote bool) {
 		}
 		if g := sm.Term; g != tt.expTerm {
 			t.Errorf("#%d: term = %d, want %d", i, g, tt.expTerm)
+		} else {
+			if sm.state == tt.state {
+				log.Printf("#%d %s %s ok", i, sm.state, tt.state)
+			}
 		}
 	}
 }

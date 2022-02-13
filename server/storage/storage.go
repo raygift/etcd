@@ -46,6 +46,7 @@ func NewStorage(lg *zap.Logger, w *wal.WAL, s *snap.Snapshotter) Storage {
 	return &storage{lg: lg, w: w, s: s}
 }
 
+// 将snapshot 文件写入磁盘，并在WAL 中增加一条收到 snapshot 的记录
 // SaveSnap saves the snapshot file to disk and writes the WAL snapshot entry.
 func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	walsnap := walpb.Snapshot{

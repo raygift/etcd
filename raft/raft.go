@@ -618,6 +618,12 @@ func (r *raft) reset(term uint64) {
 	r.readOnly = newReadOnly(r.readOnly.option)
 }
 
+// 根据raft 节点当前 term 补充entries 中记录的Term 属性
+// 并通过raft 节点的lastIndex 得到当前index 的编号，依次为es 中的记录补充index
+// （优化）检查未提交记录的个数是否超过设定值
+// 将 entries 追加到 raft 节点的entries 中
+// 更新progress 记录的leader 自身日志匹配的位置（因为自己与自己的日志记录肯定是匹配的，因此无需关注不匹配的情况，maybeupdate 返回值被忽略）
+// 若commit idx 可以更新则更新已提交记录的idx
 func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	li := r.raftLog.lastIndex()
 	for i := range es {
@@ -689,7 +695,7 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 	r.tick = r.tickElection
 	r.lead = lead
 	r.state = StateFollower
-	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
+	r.logger.Infof("%x became follower at term %d, the leader is %d", r.id, r.Term, lead)
 }
 
 func (r *raft) becomeCandidate() {
@@ -844,11 +850,15 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected 
 	return r.prs.TallyVotes()
 }
 
+// Step 用来控制节点自身的运行状态，处理诸如收到较大term号，收到投票请求等
 func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
+	// 判断term 号与自身term 号大小关系，
+	// 若Step 传入的term 号较大，可能需要将状态转变为follower；
+	// 若Step 传入的term 较小，需要根据消息类型判断发送什么响应
 	switch {
 	case m.Term == 0:
-		// local message
+		// local message // 为什么消息的term 为0 就一定是本地消息？
 	case m.Term > r.Term:
 		if m.Type == pb.MsgVote || m.Type == pb.MsgPreVote {
 			force := bytes.Equal(m.Context, []byte(campaignTransfer))
@@ -918,9 +928,12 @@ func (r *raft) Step(m pb.Message) error {
 		}
 		return nil
 	}
-
+	// 上面对Step 传入的消息term 号进行了判断和处理；
+	// 对于term 号较小的消息，响应拒绝消息
+	// 对于消息中term 大于本节点term 的，首先改变当前raft 节点角色，并设置 step函数为stepFollower，在下方判断消息类型不是 hup、vote之后，执行 step函数
+	// 还需要根据消息类型进一步处理
 	switch m.Type {
-	case pb.MsgHup:
+	case pb.MsgHup: // msgHup 为节点内部消息，收到hup 后节点需要尝试进行选举
 		if r.preVote {
 			r.hup(campaignPreElection)
 		} else {
@@ -1017,10 +1030,10 @@ func stepLeader(r *raft, m pb.Message) error {
 		})
 		return nil
 	case pb.MsgProp:
-		if len(m.Entries) == 0 {
+		if len(m.Entries) == 0 { // 若消息中日志为空，无效的 propose 请求
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
-		if r.prs.Progress[r.id] == nil {
+		if r.prs.Progress[r.id] == nil { // 若节点被从config 记录的集群节点中移除，丢弃后续所有 propose 消息，返回ErrProposalDropped
 			// If we are not currently a member of the range (i.e. this node
 			// was removed from the configuration while serving as leader),
 			// drop any new proposals.
@@ -1473,11 +1486,12 @@ func stepFollower(r *raft, m pb.Message) error {
 }
 
 func (r *raft) handleAppendEntries(m pb.Message) {
+	// 若收到的日志 index 小于当前节点所记录的已提交记录的index，则响应leader 的报文用来告知leader 已完成同步的index 推进到了committed 位置
 	if m.Index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
 		return
 	}
-
+	// 否则，日志的 index >= raftLog.committed，继续判断与未提交的记录是否有冲突，是否可以append
 	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
 	} else {
