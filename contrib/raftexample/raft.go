@@ -448,14 +448,14 @@ func (rc *raftNode) serveChannels() {
 			rc.node.Tick()
 
 		// store raft entries to wal, then publish over commit channel
-		case rd := <-rc.node.Ready():
+		case rd := <-rc.node.Ready(): // 从 node 的 readyc 通道中 获得 ready 结构体
 			rc.wal.Save(rd.HardState, rd.Entries)
 			if !raft.IsEmptySnap(rd.Snapshot) {
 				rc.saveSnap(rd.Snapshot)
 				rc.raftStorage.ApplySnapshot(rd.Snapshot)
 				rc.publishSnapshot(rd.Snapshot)
 			}
-			rc.raftStorage.Append(rd.Entries)
+			rc.raftStorage.Append(rd.Entries) // 将ready 结构体中的 entries 保存到 raftLog的storage 中；此时完成了日志从 unstable.entries 到storage.entries 的转移，由unstable 变为了stable
 			rc.transport.Send(rd.Messages)
 			applyDoneC, ok := rc.publishEntries(rc.entriesToApply(rd.CommittedEntries))
 			if !ok {

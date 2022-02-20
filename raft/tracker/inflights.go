@@ -83,6 +83,7 @@ func (in *Inflights) grow() {
 	in.buffer = newBuffer
 }
 
+// need to go on fixing commited index update 20220220
 // FreeLE frees the inflights smaller or equal to the given `to` flight.
 func (in *Inflights) FreeLE(to uint64) {
 	if in.count == 0 || to < in.buffer[in.start] {

@@ -112,6 +112,7 @@ func (c MajorityConfig) Slice() []uint64 {
 	return sl
 }
 
+// 插入排序，从小到大的顺序
 func insertionSort(sl []uint64) {
 	a, b := 0, len(sl)
 	for i := a + 1; i < b; i++ {
@@ -130,7 +131,9 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 		// MajorityConfig, should behave like the other half.
 		return math.MaxUint64
 	}
-
+	// 当n<=7时，使用位于栈上的局部变量 slice 来汇总commited index。（而 n>7 时手动在堆上分配）
+	// 可替代方案时在MajorityConfig 中暂存这个slice，但这种方案影响可用性（众所周知，MajorityConfig 只是一个map）
+	//这里基于的假设是，大于7个副本的情况是很少的，因此不必担心大于7 时的性能问题（另外手动分配的性能也不是特别夸张）
 	// Use an on-stack slice to collect the committed indexes when n <= 7
 	// (otherwise we alloc). The alternative is to stash a slice on
 	// MajorityConfig, but this impairs usability (as is, MajorityConfig is just
@@ -140,13 +143,15 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 	// implications of an allocation here are far from drastic).
 	var stk [7]uint64
 	var srt []uint64
-	if len(stk) >= n {
+	if len(stk) >= n { // n<=7，使用栈上的slice
 		srt = stk[:n]
 	} else {
-		srt = make([]uint64, n)
+		srt = make([]uint64, n) // 手动在堆上分配slice
 	}
 
 	{
+		// 从右向左逐个为slice 中的位置赋值
+		//
 		// Fill the slice with the indexes observed. Any unused slots will be
 		// left as zero; these correspond to voters that may report in, but
 		// haven't yet. We fill from the right (since the zeroes will end up on
@@ -159,11 +164,12 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 			}
 		}
 	}
-
+	// 使用特殊的插入排序算法对slice 进行排序，使得srt 能够保留在栈上
 	// Sort by index. Use a bespoke algorithm (copied from the stdlib's sort
 	// package) to keep srt on the stack.
 	insertionSort(srt)
-
+	// 数组中最小的index 值被大多数节点认可
+	// 换句话说，从slice 的结尾开始，向左侧移动 n/2+1个位置
 	// The smallest index into the array for which the value is acked by a
 	// quorum. In other words, from the end of the slice, move n/2+1 to the
 	// left (accounting for zero-indexing).

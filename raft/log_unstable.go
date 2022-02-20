@@ -63,7 +63,7 @@ func (u *unstable) maybeLastIndex() (uint64, bool) {
 }
 
 // 检查在unstable 中索引号为i 的日志的term
-// 若 index 大于等于 unstable.offset，则 index 位于。。。
+// 若 index 大于等于 unstable.offset，则 index 位于unstable.entries 中？
 // maybeTerm returns the term of the entry at index i, if there
 // is any.
 func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
@@ -71,34 +71,42 @@ func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
 	// 此时可能存在unstable.snapshot，snapshot 中保存的entry 尚未应用到unstable.entries 中
 
 	if i < u.offset { // i 位于当前unstable.entries[0] 之前
-		if u.snapshot != nil && u.snapshot.Metadata.Index == i { //
+		// 若i 恰好等于 snapshot.Metadata.Index，则可以通过Metadata.Term 得到对应的term；
+		// 否则即使存在 unstable.snapshot，由于没有snapshot 中其他日志的信息，无法从unstable 中得到对应term
+		// 而只有当 unstable.snapshot 存在时，才有机会判断Metadata.Index == i
+		if u.snapshot != nil && u.snapshot.Metadata.Index == i {
 			return u.snapshot.Metadata.Term, true
 		}
-		return 0, false
+		return 0, false // 无法从unstable （的entries 和 snapshot）获得i 对应的 term
 	}
-
+	// 当 i >= unstable.offset，i 位于 unstable entries[0] 之后
 	last, ok := u.maybeLastIndex() // 获得unstable 中最大的索引号
 	if !ok {                       // 不存在unstable.entries 和snapshot
-		return 0, false
+		return 0, false // 无法获得 i 对应的term
 	}
+	// 存在 unstable.entries 或 unstable.snapshot
 	if i > last { // i 大于 unstable.entries 或unstable.snapshot 的last index
 		return 0, false
 	}
-
-	return u.entries[i-u.offset].Term, true // 从unstable 中获得 index 的term
+	// 若 myabeLastIndex 是根据 Unstable.snapshot 得到的
+	// 即不存在 unstable.entries，只存在 unstable.snapshot，就不能从 u.entries 获得term吧？
+	return u.entries[i-u.offset].Term, true // 从unstable 的entries 中获得 i 对应的term
 }
 
+// 在i 对应的日志记录位于 unstable entries 中时，将 untable entries 更新为offset 从i+1 开始的日志部分
 func (u *unstable) stableTo(i, t uint64) {
 	gt, ok := u.maybeTerm(i)
 	if !ok {
 		return
 	}
+	// 如果 i<u.offset，term 与 snapshot 是匹配的（个人理解：因为 unstable.offset = snapshot.Metadata.Index + 1，因此 i<u.offset，表示i <=u.snapshot.Metadata.Index）
+	// 只有在term 与至少一个 unstable entry 匹配时才更新 unstable.entries
 	// if i < offset, term is matched with the snapshot
 	// only update the unstable entries if term is matched with
 	// an unstable entry.
 	if gt == t && i >= u.offset {
-		u.entries = u.entries[i+1-u.offset:]
-		u.offset = i + 1
+		u.entries = u.entries[i+1-u.offset:] // 保留 unstable entries 中 index i 之后的部分
+		u.offset = i + 1                     // 增大 unstable.offset
 		u.shrinkEntriesArray()
 	}
 }
@@ -151,7 +159,7 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 		u.logger.Infof("replace the unstable entries from index %d", after)
 		// The log is being truncated to before our current offset
 		// portion, so set the offset and replace the entries
-		u.offset = after
+		u.offset = after // 缩小 unstable.offset
 		u.entries = ents
 	default:
 		// truncate to after and copy to u.entries

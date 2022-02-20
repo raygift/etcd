@@ -418,12 +418,16 @@ func (r *raft) send(m pb.Message) {
 	r.msgs = append(r.msgs, m)
 }
 
+// 向指定的 peer 发送当前已提交的index 号及最新的日志记录
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer.
 func (r *raft) sendAppend(to uint64) {
 	r.maybeSendAppend(to, true)
 }
 
+// 必要时，向指定 peer 发送最新的日志记录
+// sendIfEmpty 用来表明要发送的是否为空日志记录
+// （在仅更新已提交index 号时，空消息是很有用的，但在批量发送多条消息时时不需要空消息的？）
 // maybeSendAppend sends an append RPC with new entries to the given peer,
 // if necessary. Returns true if a message was sent. The sendIfEmpty
 // argument controls whether messages with no entries will be sent
@@ -431,7 +435,7 @@ func (r *raft) sendAppend(to uint64) {
 // are undesirable when we're sending multiple messages in a batch).
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	pr := r.prs.Progress[to]
-	if pr.IsPaused() {
+	if pr.IsPaused() { // 若节点被限流，则其当前状态不适合继续接收日志记录，不继续发送日志，返回false
 		return false
 	}
 	m := pb.Message{}
@@ -439,10 +443,11 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	term, errt := r.raftLog.term(pr.Next - 1)
 	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
-	if len(ents) == 0 && !sendIfEmpty {
+	if len(ents) == 0 && !sendIfEmpty { // 要发送的日志记录为空，且sendIfEmpty 标志为false 时，不继续发送日志，返回false
 		return false
 	}
-
+	// 若没有正常获得待发送日志记录的term 和记录内容
+	// 表示待发送的日志已经被生成到快照中，尝试发送快照
 	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
 		if !pr.RecentActive {
 			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
@@ -451,11 +456,12 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 		m.Type = pb.MsgSnap
 		snapshot, err := r.raftLog.snapshot()
-		if err != nil {
-			if err == ErrSnapshotTemporarilyUnavailable {
+		if err != nil { // 快照也不可用，此时leader 知道需要发送某些日志，但从raftLog 和快照中都无法获得要发送的内容
+			if err == ErrSnapshotTemporarilyUnavailable { // 快照暂时不可用
 				r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
 				return false
 			}
+			// 否则，快照和raftLog 都无法获得要发送的内容，leader 状态可能存在问题
 			panic(err) // TODO(bdarnell)
 		}
 		if IsEmptySnap(snapshot) {
@@ -467,7 +473,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 			r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
 		pr.BecomeSnapshot(sindex)
 		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
-	} else {
+	} else { // 正常获取到了待发送的日志记录和term，准备消息m 并尝试执行发送
 		m.Type = pb.MsgApp
 		m.Index = pr.Next - 1
 		m.LogTerm = term
@@ -510,6 +516,7 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 	r.send(m)
 }
 
+// 向所有未达到最新状态的 peer 发送 RPC，根据记录在 r.prs 的状态进行判断 RPC 携带哪些entries
 // bcastAppend sends RPC, with entries to all peers that are not up-to-date
 // according to the progress recorded in r.prs.
 func (r *raft) bcastAppend() {
@@ -579,6 +586,8 @@ func (r *raft) advance(rd Ready) {
 	}
 }
 
+// 尝试驱动 commit index
+// 如果 commit index 被更新，则返回true（此情况下调用者需要随后调用 bcastAppend）
 // maybeCommit attempts to advance the commit index. Returns true if
 // the commit index changed (in which case the caller should call
 // r.bcastAppend).
@@ -643,7 +652,7 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	li = r.raftLog.append(es...)
 	r.prs.Progress[r.id].MaybeUpdate(li)
 	// Regardless of maybeCommit's return, our caller will call bcastAppend.
-	r.maybeCommit()
+	r.maybeCommit() // 尝试更新committed
 	return true
 }
 
@@ -1108,7 +1117,7 @@ func stepLeader(r *raft, m pb.Message) error {
 
 		return nil
 	}
-
+	// 其余的所有消息类型，都需要更新 m.From 对应的 progress
 	// All other message types require a progress for m.From (pr).
 	pr := r.prs.Progress[m.From]
 	if pr == nil {
@@ -1247,7 +1256,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				}
 				r.sendAppend(m.From)
 			}
-		} else {
+		} else { // AppendEntry 请求被接受
 			oldPaused := pr.IsPaused()
 			if pr.MaybeUpdate(m.Index) {
 				switch {

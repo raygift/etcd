@@ -152,6 +152,7 @@ func (pr *Progress) MaybeUpdate(n uint64) bool {
 	return updated
 }
 
+// 乐观更新，将pr.Next 更新为 n+1
 // OptimisticUpdate signals that appends all the way up to and including index n
 // are in-flight. As a result, Next is increased to n+1.
 func (pr *Progress) OptimisticUpdate(n uint64) { pr.Next = n + 1 }
@@ -192,6 +193,10 @@ func (pr *Progress) MaybeDecrTo(rejected, matchHint uint64) bool {
 	return true
 }
 
+// 用来判断progress 对应的节点是否已经被限流
+// 当一个节点拒绝了最近一次的MsgApps 消息时，代表它当前正处于等待快照的阶段，或者节点已经达到 MaxInflightMsgs 的上限时，会被限流
+// 除这两种情况之外的正常情况下，IsPaused 返回false
+// leader 会降低与被限流节点的通信频率，直到该节点再次恢复到可以接收稳定日志流的状态
 // IsPaused returns whether sending log entries to this node has been throttled.
 // This is done when a node has rejected recent MsgApps, is currently waiting
 // for a snapshot, or has reached the MaxInflightMsgs limit. In normal

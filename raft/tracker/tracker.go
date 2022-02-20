@@ -172,6 +172,7 @@ func (l matchAckIndexer) AckedIndex(id uint64) (quorum.Index, bool) {
 	return quorum.Index(pr.Match), true
 }
 
+// 基于集群中成员反馈的信息，返回已知的最大的committed index
 // Committed returns the largest log index known to be committed based on what
 // the voting members of the group have acknowledged.
 func (p *ProgressTracker) Committed() uint64 {
@@ -187,6 +188,7 @@ func insertionSort(sl []uint64) {
 	}
 }
 
+// 针对所有被跟踪的progress，调用回调函数f
 // Visit invokes the supplied closure for all tracked progresses in stable order.
 func (p *ProgressTracker) Visit(f func(id uint64, pr *Progress)) {
 	n := len(p.Progress)

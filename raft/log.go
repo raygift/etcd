@@ -83,9 +83,10 @@ func (l *raftLog) String() string {
 	return fmt.Sprintf("committed=%d, applied=%d, unstable.offset=%d, len(unstable.Entries)=%d", l.committed, l.applied, l.unstable.offset, len(l.unstable.entries))
 }
 
-// MaybeAppend 只用在 handleAppendEntries() 时，用来判断传入的 m.entries 是否可以被append
+// MaybeAppend 只用在 handleAppendEntries() 时，用来判断传入的 m.entries 是否可以被append，若可以则将传入的entries 添加到unstable.entries 中
 // 若传入的 m.Index 和 m.LogTerm 与RaftLog 中对应 [index,term] 存在冲突，则无需判断 m.Entries，直接返回false，表示无法append
-// 否则，判断传入的 m.Entries 与 RaftLog// maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
+// 否则，判断传入的 m.Entries 与 RaftLog 位置关系
+// maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
 // it returns (last index of new entries, true).
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
 	// 首先判断传入的 term 与logTerm 是否与RaftLog 存在冲突；若存在冲突则没有必要继续判断，直接返回false
@@ -118,7 +119,7 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	if after := ents[0].Index - 1; after < l.committed {
 		l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
 	}
-	l.unstable.truncateAndAppend(ents)
+	l.unstable.truncateAndAppend(ents) // 将append 的 entries 存入 unstable.entries
 	return l.lastIndex()
 }
 
@@ -219,7 +220,7 @@ func (l *raftLog) snapshot() (pb.Snapshot, error) {
 // 由于 Storage 中的日志在上层创建快照时会被Compact 后删除，因此 Storage 中保存的日志是最后一次执行snapshot 之后剩下的日志
 // 由于 unstable 的snapshot 来自作为 raft follower/candidate 时收到leader 复制来的snapshot，调用handleSnapshot()
 // 若存在unstable.snapshot，则 raftLog 中首条日志索引一定是 snapshot.Metadata.Index+1
-// 若 unstable 不存在unstable.snapshto，由于 Storage 中首个日志是dummy entry，而dummy entry 中记录了上一次快照的snapshot.Metadata.Index
+// 若 unstable 不存在unstable.snapshot，由于 Storage 中首个日志是dummy entry，而dummy entry 中记录了上一次快照的snapshot.Metadata.Index
 // 		因此返回dummy entry.Index +1
 func (l *raftLog) firstIndex() uint64 {
 	if i, ok := l.unstable.maybeFirstIndex(); ok { // 判断是否可以从unstable.snapshot 获得 raftLog 的首条日志索引；若存在unstable.snapshot，则 raftLog 中首条日志索引一定是 snapshot.Metadata.Index+1
@@ -359,34 +360,37 @@ func (l *raftLog) restore(s pb.Snapshot) {
 	l.unstable.restore(s)
 }
 
+// 获取 log 中[lo,hi-1]的日志记录
+// 但不保证返回的记录条数一定时 hi-lo 条，因为收到 maxSize 的限制；以及 storage 中可能已经将部分记录compact，此时只能返回尚未截断的部分日志
 // slice returns a slice of log entries from lo through hi-1, inclusive.
 func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	err := l.mustCheckOutOfBounds(lo, hi)
 	if err != nil {
 		return nil, err
 	}
+	// 经过 mustCheckOutOfBounds，此时确定 lo >= l.FirstIndex()
 	if lo == hi {
 		return nil, nil
 	}
 	var ents []pb.Entry
-	if lo < l.unstable.offset {
+	if lo < l.unstable.offset { // unstable.offset 表示unstable.entries 的首条日志的index，小于 offset 说明 low 对应的日志已经位于 stabled 的storage.entries 中
 		storedEnts, err := l.storage.Entries(lo, min(hi, l.unstable.offset), maxSize)
-		if err == ErrCompacted {
+		if err == ErrCompacted { // 若上次执行完快照，且已经执行完Compacted，则storage 中的此部分日志已经被截断，返回 ErrCompacted
 			return nil, err
-		} else if err == ErrUnavailable {
+		} else if err == ErrUnavailable { // storage 中只包含一个 dummy 记录时会返回 unavailable；还有其他情况也会返回此报错；对于此种状态的raftLog 执行slice 会引发painc
 			l.logger.Panicf("entries[%d:%d) is unavailable from storage", lo, min(hi, l.unstable.offset))
-		} else if err != nil {
+		} else if err != nil { // error 是 ErrCompacted 与 ErrUnavailable 之外的其他报错，未定义的情况，程序panic
 			panic(err) // TODO(bdarnell)
 		}
-
+		// 若上次执行完快照，但尚未执行Compacted，则从 storage 中仍然可以获取到[lo,unstable.offset] 之间的日志记录
 		// check if ents has reached the size limitation
-		if uint64(len(storedEnts)) < min(hi, l.unstable.offset)-lo {
+		if uint64(len(storedEnts)) < min(hi, l.unstable.offset)-lo { // 获取到的记录条数较少，少于 min(hi, l.unstable.offset)-lo ，则一定不回超过maxSize，直接返回
 			return storedEnts, nil
 		}
 
 		ents = storedEnts
 	}
-	if hi > l.unstable.offset {
+	if hi > l.unstable.offset { // 若 hi 位于 unstable.offset 之后，则unstable 包含要获取的部分日志，这部分日志是[unstable.offset,hi]
 		unstable := l.unstable.slice(max(lo, l.unstable.offset), hi)
 		if len(ents) > 0 {
 			combined := make([]pb.Entry, len(ents)+len(unstable))
@@ -400,23 +404,25 @@ func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	return limitSize(ents, maxSize), nil
 }
 
+// 检查 [lo,hi] 的合法性：位于 RaftLog 的 [firstIndex, lastIndex+1] 区间内，且 lo <=hi
 // l.firstIndex <= lo <= hi <= l.firstIndex + len(l.entries)
 func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
-	if lo > hi {
+	if lo > hi { // low > high 显然不合法
 		l.logger.Panicf("invalid slice %d > %d", lo, hi)
 	}
 	fi := l.firstIndex()
-	if lo < fi {
+	if lo < fi { // low < firstIndex ，而 firstIndex 之前的都已经被包含在快照后截断了，因此返回 Compacted
 		return ErrCompacted
 	}
 
-	length := l.lastIndex() + 1 - fi
-	if hi > fi+length {
+	length := l.lastIndex() + 1 - fi // 计算从 firstIndex 到 lastIndex 所有日志记录的条数
+	if hi > fi+length {              // （貌似没必要计算length，直接判断 high > lastIndex + 1 不就行了？）
 		l.logger.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.lastIndex())
 	}
 	return nil
 }
 
+// err 为nil 则返回 t；err 为 ErrCompacted 则返回0；其他err 则panic
 func (l *raftLog) zeroTermOnErrCompacted(t uint64, err error) uint64 {
 	if err == nil {
 		return t

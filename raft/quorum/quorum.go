@@ -37,6 +37,7 @@ type AckedIndexer interface {
 
 type mapAckIndexer map[uint64]Index
 
+// follower 在对leader 发送的appendEntry 进行响应确认，确认中包含的已同步的index 被记录到一个map里
 func (m mapAckIndexer) AckedIndex(id uint64) (Index, bool) {
 	idx, ok := m[id]
 	return idx, ok

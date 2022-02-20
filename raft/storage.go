@@ -114,7 +114,7 @@ func (ms *MemoryStorage) SetHardState(st pb.HardState) error {
 func (ms *MemoryStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	ms.Lock()
 	defer ms.Unlock()
-	offset := ms.ents[0].Index
+	offset := ms.ents[0].Index // storage 中首条日志的index 记为offset，offset 之前的日志已经被压缩，不存在于storage 中
 	if lo <= offset {
 		return nil, ErrCompacted
 	}
@@ -208,7 +208,7 @@ func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte)
 		return pb.Snapshot{}, ErrSnapOutOfDate //requested index is older than the existing snapshot
 	}
 
-	offset := ms.ents[0].Index // offset 记录ms 中entries 的首条记录的index，此记录之前的所有记录已经被截断
+	offset := ms.ents[0].Index // 此offset 非 storage.offset；此offset 记录ms 中entries 的首条记录的index，此记录之前的所有记录已经被截断
 	if i > ms.lastIndex() {    // 若i 超过ms 中最后一条记录的index，抛出异常
 		getLogger().Panicf("snapshot %d is out of bound lastindex(%d)", i, ms.lastIndex())
 	}
