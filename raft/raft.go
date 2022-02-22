@@ -1258,7 +1258,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		} else { // AppendEntry 请求被接受
 			oldPaused := pr.IsPaused()
-			if pr.MaybeUpdate(m.Index) {
+			if pr.MaybeUpdate(m.Index) { // 尝试更新pr 的match 与next，并重置Probe 标志用来告知leader 可以继续发送append
 				switch {
 				case pr.State == tracker.StateProbe:
 					pr.BecomeReplicate()

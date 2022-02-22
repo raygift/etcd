@@ -102,6 +102,8 @@ func min(a, b uint64) uint64 {
 	return a
 }
 
+// 重置 pr.ProbeSent 状态为false，指示leader 后续append 消息可以无延迟地被继续发送
+// 在 follower 接收了一次appendentries RPC 时，ProbeAcked() 被调用
 // ProbeAcked is called when this peer has accepted an append. It resets
 // ProbeSent to signal that additional append messages should be sent without
 // further delay.
@@ -138,6 +140,11 @@ func (pr *Progress) BecomeSnapshot(snapshoti uint64) {
 	pr.PendingSnapshot = snapshoti
 }
 
+// leader 收到follower 响应AppendEntries 的消息，且响应消息不是reject，
+// 则follower 已经确认收到leader 同步的entries；
+// 此时 leader 调用 MaybeUpdate；
+// 当传入的参数n 大于follower match 的index时，返回true并更新 match，
+// 否则返回false，同时更新后续要传递给follower 的日志编号next
 // MaybeUpdate is called when an MsgAppResp arrives from the follower, with the
 // index acked by it. The method returns false if the given n index comes from
 // an outdated message. Otherwise it updates the progress and returns true.
@@ -146,7 +153,7 @@ func (pr *Progress) MaybeUpdate(n uint64) bool {
 	if pr.Match < n { // 若n 大于 已知match 的index，则更新 match index
 		pr.Match = n
 		updated = true
-		pr.ProbeAcked()
+		pr.ProbeAcked() // 重置标志，告知leader 可以继续发送后续append 消息
 	}
 	pr.Next = max(pr.Next, n+1)
 	return updated

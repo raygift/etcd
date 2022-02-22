@@ -179,6 +179,7 @@ func (p *ProgressTracker) Committed() uint64 {
 	return uint64(p.Voters.CommittedIndex(matchAckIndexer(p.Progress)))
 }
 
+// 插入排序，从小到大排序
 func insertionSort(sl []uint64) {
 	a, b := 0, len(sl)
 	for i := a + 1; i < b; i++ {
@@ -206,7 +207,7 @@ func (p *ProgressTracker) Visit(f func(id uint64, pr *Progress)) {
 		n--
 		ids[n] = id
 	}
-	insertionSort(ids)
+	insertionSort(ids) // 对id 进行排序
 	for _, id := range ids {
 		f(id, p.Progress[id])
 	}

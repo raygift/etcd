@@ -21,6 +21,8 @@ import (
 	"strings"
 )
 
+// MajorityConfig 是保存了所有节点id 的map 结构；
+// 目的是为了判断多数派
 // MajorityConfig is a set of IDs that uses majority quorums to make decisions.
 type MajorityConfig map[uint64]struct{}
 
@@ -122,11 +124,12 @@ func insertionSort(sl []uint64) {
 	}
 }
 
+//
 // CommittedIndex computes the committed index from those supplied via the
 // provided AckedIndexer (for the active config).
 func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
-	n := len(c)
-	if n == 0 {
+	n := len(c) // 当前config 中记录的集群节点个数
+	if n == 0 { // 当前config 中记录的节点个数为0，则应该以另一个
 		// This plays well with joint quorums which, when one half is the zero
 		// MajorityConfig, should behave like the other half.
 		return math.MaxUint64
