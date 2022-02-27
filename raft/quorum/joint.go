@@ -43,6 +43,7 @@ func (c JointConfig) Describe(l AckedIndexer) string {
 	return MajorityConfig(c.IDs()).Describe(l)
 }
 
+// 接收一个AckedIndexer 接口的实现类型，返回 Index
 // joint quorum 是集群节点变更的共识算法；集群中有节点变更时，会存在c_old 和 c_new 两个配置，分别指示了旧集群节点和新集群节点数量情况；
 // 此处选择两个配置中较小的committedIndex，作为最新的可提交日志编号
 // JointConfig 是由两个map 元素组成的数组，每个map 记录了

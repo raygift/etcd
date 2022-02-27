@@ -463,7 +463,7 @@ func (rc *raftNode) serveChannels() {
 				return
 			}
 			rc.maybeTriggerSnapshot(applyDoneC)
-			rc.node.Advance()
+			rc.node.Advance() // 驱动raft 执行 raft/raft.go: advance()
 
 		case err := <-rc.transport.ErrorC:
 			rc.writeError(err)

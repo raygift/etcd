@@ -35,9 +35,10 @@ type AckedIndexer interface {
 	AckedIndex(voterID uint64) (idx Index, found bool)
 }
 
-type mapAckIndexer map[uint64]Index
+type mapAckIndexer map[uint64]Index // mapAckIndexer 只是一个 map[] 类型，因此下方 AckedIndex 可以对任意 map[uint64]Index 执行；在判断节点已经接收到的最大日志index 时，AckedIndex 被应用于确认follower 已acked 的最大index，位于/etcd/raft/tracker/tracker.go：func (p *ProgressTracker) Committed() uint64
 
 // follower 在对leader 发送的appendEntry 进行响应确认，确认中包含的已同步的index 被记录到一个map里
+// 若节点 id 已对接收到的 index 进行过ack 确认，则在 mapAckIndexer 中会存在 m[id]=index 这样一条映射
 func (m mapAckIndexer) AckedIndex(id uint64) (Index, bool) {
 	idx, ok := m[id]
 	return idx, ok

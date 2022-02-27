@@ -547,6 +547,9 @@ func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
 	})
 }
 
+// 上层在处理完日志记录的持久化之后，调用 rawnode.Advance() ，并最终调用到此方法
+// stableTo 通过更新unstable 的offset 记录已经被执行持久化的entries 位置；
+// 而对于snapshot，已经完成持久化的snapshot 无需再保存在内存中，stableSnapTo 将删除 unstable 的 snapshot
 func (r *raft) advance(rd Ready) {
 	r.reduceUncommittedSize(rd.CommittedEntries)
 

@@ -124,12 +124,12 @@ func insertionSort(sl []uint64) {
 	}
 }
 
-//
+// 针对当前生效的配置c，通过传入的AckedIndexer 计算已提交index 编号
 // CommittedIndex computes the committed index from those supplied via the
 // provided AckedIndexer (for the active config).
 func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 	n := len(c) // 当前config 中记录的集群节点个数
-	if n == 0 { // 当前config 中记录的节点个数为0，则应该以另一个
+	if n == 0 { // 即使当前config 中记录的节点个数为0，也应该向另外一个config 一样返回已提交编号 committed index；这里选择返回一个特别大的数，从而避免影响 基于两个config 得到的 committed index 中较小值
 		// This plays well with joint quorums which, when one half is the zero
 		// MajorityConfig, should behave like the other half.
 		return math.MaxUint64
@@ -144,8 +144,8 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 	// replication factor of >7 is rare, and in cases in which it happens
 	// performance is a lesser concern (additionally the performance
 	// implications of an allocation here are far from drastic).
-	var stk [7]uint64
-	var srt []uint64
+	var stk [7]uint64  // 位于栈上的局部数组变量
+	var srt []uint64   // 位于栈上的局部slice 变量
 	if len(stk) >= n { // n<=7，使用栈上的slice
 		srt = stk[:n]
 	} else {
@@ -154,7 +154,7 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 
 	{
 		// 从右向左逐个为slice 中的位置赋值
-		//
+		// 赋值内容为某节点id 所确认的 index
 		// Fill the slice with the indexes observed. Any unused slots will be
 		// left as zero; these correspond to voters that may report in, but
 		// haven't yet. We fill from the right (since the zeroes will end up on

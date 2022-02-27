@@ -394,7 +394,7 @@ func (n *node) run() {
 		case readyc <- rd:
 			n.rn.acceptReady(rd)
 			advancec = n.advancec
-		case <-advancec:
+		case <-advancec: // 接收到上层应用发送来的信号
 			n.rn.Advance(rd)
 			rd = Ready{}
 			advancec = nil
@@ -500,9 +500,10 @@ func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) 
 
 func (n *node) Ready() <-chan Ready { return n.readyc }
 
+// 上层应用在收到Ready 结构体并执行 raftStorage.Append()持久化 等操作之后，调用 Advance 告知raft 层已经收到Ready 结构体并完成持久化，可以继续进行后续操作（已经持久化的日志记录可以删除？）
 func (n *node) Advance() {
 	select {
-	case n.advancec <- struct{}{}:
+	case n.advancec <- struct{}{}: // 发送信号驱动 raft 执行 advance()
 	case <-n.done:
 	}
 }

@@ -249,6 +249,7 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	return nil
 }
 
+// 将日志追加写入持久化存储；由上层应用调用（写storage 相关操作都是由上层应用调用的）
 // Append the new entries to storage.
 // TODO (xiangli): ensure the entries are continuous and
 // entries[0].Index > ms.entries[0].Index

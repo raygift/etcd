@@ -159,24 +159,24 @@ func (p *ProgressTracker) IsSingleton() bool {
 	return len(p.Voters[0]) == 1 && len(p.Voters[1]) == 0
 }
 
-type matchAckIndexer map[uint64]*Progress
+type matchAckIndexer map[uint64]*Progress // 因为matchAckIndexer 实现了 ./quorum/quorum.go 中 AckedIndexer 接口的AckedIndex 方法，因此 matchAckIndexer 也是一个 AckedIndexer 接口的实现
 
 var _ quorum.AckedIndexer = matchAckIndexer(nil)
 
 // AckedIndex implements IndexLookuper.
 func (l matchAckIndexer) AckedIndex(id uint64) (quorum.Index, bool) {
-	pr, ok := l[id]
+	pr, ok := l[id] // 检查是否存在对应的Progress
 	if !ok {
 		return 0, false
 	}
-	return quorum.Index(pr.Match), true
+	return quorum.Index(pr.Match), true // 返回Progress 所记录的match；统计所有节点的match 便可以得到大多数节点已经完成同步的最大index， 即为当前最新的 committed index
 }
 
 // 基于集群中成员反馈的信息，返回已知的最大的committed index
 // Committed returns the largest log index known to be committed based on what
 // the voting members of the group have acknowledged.
 func (p *ProgressTracker) Committed() uint64 {
-	return uint64(p.Voters.CommittedIndex(matchAckIndexer(p.Progress)))
+	return uint64(p.Voters.CommittedIndex(matchAckIndexer(p.Progress))) // 将Progress 类型转化为matchAckIndxer 类型，而matchAckIndexer 是 AckedIndexer 接口的一个实现
 }
 
 // 插入排序，从小到大排序

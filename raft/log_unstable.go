@@ -56,7 +56,7 @@ func (u *unstable) maybeLastIndex() (uint64, bool) {
 	if l := len(u.entries); l != 0 {
 		return u.offset + uint64(l) - 1, true
 	}
-	if u.snapshot != nil {
+	if u.snapshot != nil { // 存在unstable snapshot，随后snapshot 将被执行restore，当前
 		return u.snapshot.Metadata.Index, true
 	}
 	return 0, false

@@ -22,7 +22,12 @@ import (
 )
 
 type raftLog struct {
+	// 一条来自应用的日志流向：
+	// 1. 从应用传送到leader 的unstable.Entries
+	// 2. leader：进入leader 的storage				|		2. follower：从leader 发送到follower 的unstable.Entries
+
 	// storage contains all stable entries since the last snapshot.
+	// 保存了自最后一次执行snapshot 之后的所有已经持久化的日志（）
 	storage Storage
 
 	// unstable contains all unstable entries and snapshot.
