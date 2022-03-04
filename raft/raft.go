@@ -427,13 +427,15 @@ func (r *raft) sendAppend(to uint64) {
 
 // 必要时，向指定 peer 发送最新的日志记录
 // sendIfEmpty 用来表明要发送的是否为空日志记录
-// （在仅更新已提交index 号时，空消息是很有用的，但在批量发送多条消息时时不需要空消息的？）
+// （在仅更新已提交index 号时，空消息是很有用的，但在批量发送多条消息时不需要空消息）
 // maybeSendAppend sends an append RPC with new entries to the given peer,
 // if necessary. Returns true if a message was sent. The sendIfEmpty
 // argument controls whether messages with no entries will be sent
 // ("empty" messages are useful to convey updated Commit indexes, but
 // are undesirable when we're sending multiple messages in a batch).
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
+	r.logger.Infof("%d maybeSendAppend to %d", r.id, to)
+
 	pr := r.prs.Progress[to]
 	if pr.IsPaused() { // 若节点被限流，则其当前状态不适合继续接收日志记录，不继续发送日志，返回false
 		return false
@@ -520,6 +522,7 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 // bcastAppend sends RPC, with entries to all peers that are not up-to-date
 // according to the progress recorded in r.prs.
 func (r *raft) bcastAppend() {
+	r.logger.Infof("%d bcastAppend", r.id)
 	r.prs.Visit(func(id uint64, _ *tracker.Progress) {
 		if id == r.id {
 			return
@@ -656,6 +659,7 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	r.prs.Progress[r.id].MaybeUpdate(li)
 	// Regardless of maybeCommit's return, our caller will call bcastAppend.
 	r.maybeCommit() // 尝试更新committed
+	r.logger.Infof("appendEntry done r.lastindex:%d, r.lastterm:%d", r.raftLog.lastIndex(), r.raftLog.lastTerm())
 	return true
 }
 

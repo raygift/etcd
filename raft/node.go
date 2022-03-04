@@ -389,8 +389,8 @@ func (n *node) run() {
 			case n.confstatec <- cs:
 			case <-n.done:
 			}
-		case <-n.tickc:
-			n.rn.Tick()
+		case <-n.tickc: // func (rc *raftNode) serveChannels() -> func (n *node) Tick() -> tickc 收到消息
+			n.rn.Tick() // 调用 rn.Tick() -> func (rn *RawNode) Tick() -> type raft struct{} . tick, raft 的tick 已经根据raft 节点的角色设为对应的 tickElection() 或 tickHeartbeat() 方法，执行时会先判断是否有选举超时会心跳超时
 		case readyc <- rd:
 			n.rn.acceptReady(rd)
 			advancec = n.advancec
@@ -409,7 +409,7 @@ func (n *node) run() {
 
 // Tick increments the internal logical clock for this Node. Election timeouts
 // and heartbeat timeouts are in units of ticks.
-func (n *node) Tick() {
+func (n *node) Tick() { //func (rc *raftNode) serveChannels() 会设置定时触发，持续调用Tick()
 	select {
 	case n.tickc <- struct{}{}:
 	case <-n.done:

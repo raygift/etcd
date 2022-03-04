@@ -410,7 +410,7 @@ func (rc *raftNode) serveChannels() {
 
 	defer rc.wal.Close()
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond) // 定时器，每100ms 触发一次
 	defer ticker.Stop()
 
 	// send proposals over raft
@@ -444,7 +444,7 @@ func (rc *raftNode) serveChannels() {
 	// event loop on raft state machine updates
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticker.C: // 定时器触发，调用node.Tick() 向 node 的tickc 通道发送消息
 			rc.node.Tick()
 
 		// store raft entries to wal, then publish over commit channel
