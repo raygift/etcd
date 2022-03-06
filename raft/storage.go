@@ -60,7 +60,8 @@ type Storage interface {
 	// LastIndex returns the index of the last entry in the log.
 	LastIndex() (uint64, error)
 	// FirstIndex() 返回第一个非dummy entry。
-	// 若只存在dummy entry，则 首条日志记录不可用
+	// 若只存在dummy entry，则返回一个不存在的日志的index，需要特别注意
+	// 首条日志记录不可用
 	// FirstIndex returns the index of the first log entry that is
 	// possibly available via Entries (older entries have been incorporated
 	// into the latest Snapshot; if storage only contains the dummy entry the
@@ -162,8 +163,11 @@ func (ms *MemoryStorage) FirstIndex() (uint64, error) {
 	return ms.firstIndex(), nil
 }
 
+// firstIndex 返回尚未被压缩的、持久化存储中的第一个真实entry 的index
+// 注意当storage 初始化后尚没有任何日志被存入时，返回的是dummyIndex +1 ，此时是一个推测值，并不代表真实情况
+// dummy entry 是人为添加的辅助entry，其中记录的index 为已被压缩的最后一条日志的index
 func (ms *MemoryStorage) firstIndex() uint64 {
-	return ms.ents[0].Index + 1
+	return ms.ents[0].Index + 1 // dummy entry 中记录的 index +1，得到storage 中首条 非dummy entry 的index
 }
 
 // Snapshot implements the Storage interface.
@@ -189,7 +193,7 @@ func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 	// 将storage.snapshot 更新为最新apply 的快照
 	// storage.ents 记录
 	ms.snapshot = snap
-	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}}
+	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}} // 将storage 保存的entries 重置为只包含一个dummy entry
 	return nil
 }
 
@@ -242,10 +246,10 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	// snap|
 	i := compactIndex - offset                            // i 为要截断的记录长度
 	ents := make([]pb.Entry, 1, 1+uint64(len(ms.ents))-i) // ents 的cap 为截断i个记录后ms entries 数组的长度+1
-	ents[0].Index = ms.ents[i].Index                      // 截断后首条记录的index 为i
-	ents[0].Term = ms.ents[i].Term
-	ents = append(ents, ms.ents[i+1:]...) // 向entries 中追加i 之后的剩余记录
-	ms.ents = ents                        // ms entries 中的记录最终为[i, i+1..., nil]
+	ents[0].Index = ms.ents[i].Index                      // 截断后首条记录为dummy entry，记录的index 是最后一次压缩截断时的最大index
+	ents[0].Term = ms.ents[i].Term                        // dummy entry 记录的term
+	ents = append(ents, ms.ents[i+1:]...)                 // 向entries 中追加i 之后的剩余记录
+	ms.ents = ents                                        // ms entries 中的记录最终为[i, i+1..., nil]
 	return nil
 }
 

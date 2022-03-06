@@ -198,6 +198,7 @@ type Config struct {
 	DisableProposalForwarding bool
 }
 
+// Config 中参数的合法性检查
 func (c *Config) validate() error {
 	if c.ID == None {
 		return errors.New("cannot use none as id")
@@ -315,9 +316,10 @@ type raft struct {
 	pendingReadIndexMessages []pb.Message
 }
 
+// 根据提供的Config 创建一个Raft 节点
 func newRaft(c *Config) *raft {
 	if err := c.validate(); err != nil {
-		panic(err.Error())
+		panic(err.Error()) // Config 不是合法有效的配置
 	}
 	raftlog := newLogWithSize(c.Storage, c.Logger, c.MaxCommittedSizePerReady)
 	hs, cs, err := c.Storage.InitialState()
@@ -364,8 +366,8 @@ func newRaft(c *Config) *raft {
 		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
 	}
 
-	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
-		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm())
+	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d, firstindex: %d,]",
+		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm(), r.raftLog.firstIndex())
 	return r
 }
 
@@ -554,6 +556,8 @@ func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
 // stableTo 通过更新unstable 的offset 记录已经被执行持久化的entries 位置；
 // 而对于snapshot，已经完成持久化的snapshot 无需再保存在内存中，stableSnapTo 将删除 unstable 的 snapshot
 func (r *raft) advance(rd Ready) {
+	r.logger.Infof("%x advance", r.id)
+
 	r.reduceUncommittedSize(rd.CommittedEntries)
 
 	// If entries were applied (or a snapshot), update our cursor for
@@ -1406,6 +1410,8 @@ func stepCandidate(r *raft, m pb.Message) error {
 	// Only handle vote responses corresponding to our candidacy (while in
 	// StateCandidate, we may get stale MsgPreVoteResp messages in this term from
 	// our pre-candidate state).
+	r.logger.Infof("%x stepCandidate", r.id)
+
 	var myVoteRespType pb.MessageType
 	if r.state == StatePreCandidate {
 		myVoteRespType = pb.MsgPreVoteResp

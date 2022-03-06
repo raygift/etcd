@@ -133,6 +133,9 @@ func (rc *raftNode) saveSnap(snap raftpb.Snapshot) error {
 	return rc.wal.ReleaseLockTo(snap.Metadata.Index)
 }
 
+// 传入的 ents 包好已经被应用的日志记录，同时还可能包含尚未被应用的日志记录
+// ents 结构类似于 [...appliedIndex|committedIndex...]
+// 因此将ents 中已提交、但尚未被应用的日志记录截取出来，并赋值给nents 返回
 func (rc *raftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 	if len(ents) == 0 {
 		return ents
@@ -147,6 +150,9 @@ func (rc *raftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 	return nents
 }
 
+// 传入的ents 是所有已经提交、但尚未被应用的日志记录
+// 将传入的ents 组装为string 切片data，并将data 和对应的applyDoneC 通道通过 commitC 通道传递给raft 的上层应用
+// raft 的上层应用得知日志已经被提交，便可以对日志中记录的操作进行应用（参见 func (s *kvstore) readCommits ，应用将获取并保存日志记录的kv 值）
 // publishEntries writes committed log entries to commit channel and returns
 // whether all entries could be published.
 func (rc *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) {
@@ -158,7 +164,7 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 	for i := range ents {
 		switch ents[i].Type {
 		case raftpb.EntryNormal:
-			if len(ents[i].Data) == 0 {
+			if len(ents[i].Data) == 0 { // 忽略 noop 空日志
 				// ignore empty messages
 				break
 			}
@@ -193,7 +199,7 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 			return nil, false
 		}
 	}
-
+	// 向 commitC 写入消息返回，说明上层应用已经得到要应用的日志，此时可以
 	// after commit, update appliedIndex
 	rc.appliedIndex = ents[len(ents)-1].Index
 
@@ -360,15 +366,16 @@ func (rc *raftNode) publishSnapshot(snapshotToSave raftpb.Snapshot) {
 
 var snapshotCatchUpEntriesN uint64 = 10000
 
+// 在将已提交的日志发送给上层应用后，appliedIndex 被更新，此时可能达到创建快照的条件，尝试创建快照
 func (rc *raftNode) maybeTriggerSnapshot(applyDoneC <-chan struct{}) {
-	if rc.appliedIndex-rc.snapshotIndex <= rc.snapCount {
+	if rc.appliedIndex-rc.snapshotIndex <= rc.snapCount { // 要执行快照保存的已应用日志记录数量< snapCount，暂不执行snapshot
 		return
 	}
-
+	// 阻塞等待，直到所有已提交日志都完成应用（或者server 被关闭）
 	// wait until all committed entries are applied (or server is closed)
 	if applyDoneC != nil {
 		select {
-		case <-applyDoneC:
+		case <-applyDoneC: // 上层在将需要应用的日志应用完成后，执行 close(applyDoneC)关闭applyDoneC 通道，此处阻塞可返回
 		case <-rc.stopc:
 			return
 		}
@@ -387,7 +394,7 @@ func (rc *raftNode) maybeTriggerSnapshot(applyDoneC <-chan struct{}) {
 		panic(err)
 	}
 
-	compactIndex := uint64(1)
+	compactIndex := uint64(1) // 对appliedIndex 执行快照后，为什么执行压缩的index 为1 或 appliedIndex-10000? // 为什么不从appliedIndex 执行压缩截断？
 	if rc.appliedIndex > snapshotCatchUpEntriesN {
 		compactIndex = rc.appliedIndex - snapshotCatchUpEntriesN
 	}
@@ -457,7 +464,7 @@ func (rc *raftNode) serveChannels() {
 			}
 			rc.raftStorage.Append(rd.Entries) // 将ready 结构体中的 entries 保存到 raftLog的storage 中；此时完成了日志从 unstable.entries 到storage.entries 的转移，由unstable 变为了stable
 			rc.transport.Send(rd.Messages)
-			applyDoneC, ok := rc.publishEntries(rc.entriesToApply(rd.CommittedEntries))
+			applyDoneC, ok := rc.publishEntries(rc.entriesToApply(rd.CommittedEntries)) // 将已提交、但尚应用的日志通过commitC 通道发送给上层应用，使用applyDoneC 通道等待上层将日志完成应用的消息
 			if !ok {
 				rc.stop()
 				return

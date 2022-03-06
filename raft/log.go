@@ -288,8 +288,11 @@ func (l *raftLog) lastTerm() uint64 {
 // 会首先判断 i 的合法性，若index 小于 dummyIndex 或者大于 lastIndex，则不合法
 // 确定索引号合法后，首先在unstable 中
 func (l *raftLog) term(i uint64) (uint64, error) {
+	log.Printf("log firstIndex %d to lastIndex %d\n", l.firstIndex(), l.lastIndex())
 	// the valid term range is [index of dummy entry, last index]
 	dummyIndex := l.firstIndex() - 1
+	// 因为 firstIndex 是根据 dummyIndex+1 得到，可能是一个推测值，而非真正存在的日志；
+	// 因此此处使用dummyIndex 与传入的i 进行对比判断，只有小于 dummyIndex （而非小于firstIndex的）才被认为是一个不合理的参数
 	if i < dummyIndex || i > l.lastIndex() {
 		// TODO: return an error instead?
 		return 0, nil

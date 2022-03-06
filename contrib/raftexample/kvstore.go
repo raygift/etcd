@@ -71,7 +71,7 @@ func (s *kvstore) Propose(k string, v string) {
 }
 
 func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
-	for commit := range commitC {
+	for commit := range commitC { // 对于待应用的日志，raftNode 节点调用publishEntries 在将日志通过 commitC 传递给 readCommits 之后，便会更新其记录的appliedIndex值
 		if commit == nil {
 			// signaled to load snapshot
 			snapshot, err := s.loadSnapshot()
@@ -97,7 +97,7 @@ func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
 			s.kvStore[dataKv.Key] = dataKv.Val
 			s.mu.Unlock()
 		}
-		close(commit.applyDoneC)
+		close(commit.applyDoneC) // 关闭applyDoneC 通道，raftNode 节点将从阻塞读取 applyDoneC 的动作中返回
 	}
 	if err, ok := <-errorC; ok {
 		log.Fatal(err)
