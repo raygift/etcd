@@ -142,6 +142,7 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 	return p
 }
 
+// 返回一个代表活跃配置的ConfState，活跃配置个人理解是大多数节点认可的配置
 // ConfState returns a ConfState representing the active configuration.
 func (p *ProgressTracker) ConfState() pb.ConfState {
 	return pb.ConfState{

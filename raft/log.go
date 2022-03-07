@@ -81,6 +81,12 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 	log.committed = firstIndex - 1
 	log.applied = firstIndex - 1
 
+	// ents, err := storage.Entries(firstIndex, lastIndex+1, maxNextEntsSize)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// fmt.Printf("log entries:%v", ents)
+
 	return log
 }
 
@@ -124,7 +130,11 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	if after := ents[0].Index - 1; after < l.committed {
 		l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
 	}
+	getLogger().Infof("before truncateAndAppend r.lastindex:%d, r.lastterm:%d", l.lastIndex(), l.lastTerm())
+
 	l.unstable.truncateAndAppend(ents) // 将append 的 entries 存入 unstable.entries
+	getLogger().Infof("after truncateAndAppend r.lastindex:%d, r.lastterm:%d", l.lastIndex(), l.lastTerm())
+
 	return l.lastIndex()
 }
 
@@ -181,6 +191,7 @@ func (l *raftLog) findConflictByTerm(index uint64, term uint64) uint64 {
 	return index
 }
 
+// 返回unstable 中的 entries 数组
 func (l *raftLog) unstableEntries() []pb.Entry {
 	if len(l.unstable.entries) == 0 {
 		return nil
@@ -312,6 +323,7 @@ func (l *raftLog) term(i uint64) (uint64, error) {
 	panic(err) // TODO(bdarnell)
 }
 
+// 获取 raftLog 中从 i到 lastIndex （包括i 和 lastIndex）的所有日志
 func (l *raftLog) entries(i, maxsize uint64) ([]pb.Entry, error) {
 	if i > l.lastIndex() {
 		return nil, nil

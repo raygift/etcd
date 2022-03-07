@@ -351,7 +351,7 @@ func newRaft(c *Config) *raft {
 	if err != nil {
 		panic(err)
 	}
-	assertConfStatesEquivalent(r.logger, cs, r.switchToConfig(cfg, prs))
+	assertConfStatesEquivalent(r.logger, cs, r.switchToConfig(cfg, prs)) // 确保 cs 是active 的配置
 
 	if !IsEmptyHardState(hs) {
 		r.loadState(hs)
@@ -425,6 +425,7 @@ func (r *raft) send(m pb.Message) {
 // current commit index to the given peer.
 func (r *raft) sendAppend(to uint64) {
 	r.maybeSendAppend(to, true)
+	r.logger.Infof("%d maybeSendAppend to %d", r.id, to)
 }
 
 // 必要时，向指定 peer 发送最新的日志记录
@@ -436,7 +437,6 @@ func (r *raft) sendAppend(to uint64) {
 // ("empty" messages are useful to convey updated Commit indexes, but
 // are undesirable when we're sending multiple messages in a batch).
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
-	r.logger.Infof("%d maybeSendAppend to %d", r.id, to)
 
 	pr := r.prs.Progress[to]
 	if pr.IsPaused() { // 若节点被限流，则其当前状态不适合继续接收日志记录，不继续发送日志，返回false
@@ -606,6 +606,9 @@ func (r *raft) maybeCommit() bool {
 	return r.raftLog.maybeCommit(mci, r.Term)
 }
 
+// 将raft节点的 term 重置为传入的参数
+// 并重置投票及leader 信息
+// 使用RaftLog 的lastIndex 更新所有progress 的Next 和本节点的Match，并更新其他节点的Match 为0
 func (r *raft) reset(term uint64) {
 	if r.Term != term {
 		r.Term = term
@@ -621,15 +624,18 @@ func (r *raft) reset(term uint64) {
 
 	r.prs.ResetVotes()
 	r.prs.Visit(func(id uint64, pr *tracker.Progress) {
+
 		*pr = tracker.Progress{
-			Match:     0,
-			Next:      r.raftLog.lastIndex() + 1,
+			Match:     0,                         // 所有节点的match 更新为0
+			Next:      r.raftLog.lastIndex() + 1, // 所有节点的Next 更新为当前节点的lastIndex+1
 			Inflights: tracker.NewInflights(r.prs.MaxInflight),
 			IsLearner: pr.IsLearner,
 		}
 		if id == r.id {
-			pr.Match = r.raftLog.lastIndex()
+			pr.Match = r.raftLog.lastIndex() // 针对本节点的Match，更新为当前节点的lastIndex
 		}
+		// r.logger.Infof("%x reset %d %v", r.id, id, pr)
+
 	})
 
 	r.pendingConfIndex = 0
@@ -659,11 +665,14 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 		return false
 	}
 	// use latest "last" index after truncate/append
+
 	li = r.raftLog.append(es...)
+	r.logger.Infof("appendEntry done r.lastindex:%d, r.lastterm:%d", r.raftLog.lastIndex(), r.raftLog.lastTerm())
+
 	r.prs.Progress[r.id].MaybeUpdate(li)
 	// Regardless of maybeCommit's return, our caller will call bcastAppend.
 	r.maybeCommit() // 尝试更新committed
-	r.logger.Infof("appendEntry done r.lastindex:%d, r.lastterm:%d", r.raftLog.lastIndex(), r.raftLog.lastTerm())
+	r.logger.Infof("maybeCommit done r.lastindex:%d, r.lastterm:%d", r.raftLog.lastIndex(), r.raftLog.lastTerm())
 	return true
 }
 
@@ -748,6 +757,8 @@ func (r *raft) becomePreCandidate() {
 }
 
 func (r *raft) becomeLeader() {
+	r.logger.Infof("%x will became leader at term %d", r.id, r.Term)
+
 	// TODO(xiangli) remove the panic when the raft implementation is stable
 	if r.state == StateFollower {
 		panic("invalid transition [follower -> leader]")
@@ -775,6 +786,8 @@ func (r *raft) becomeLeader() {
 		// This won't happen because we just called reset() above.
 		r.logger.Panic("empty entry was dropped")
 	}
+	r.logger.Infof("%x append noopentry at term %d", r.id, r.Term)
+
 	// As a special case, don't count the initial empty entry towards the
 	// uncommitted log quota. This is because we want to preserve the
 	// behavior of allowing one entry larger than quota if the current
@@ -1678,6 +1691,9 @@ func (r *raft) applyConfChange(cc pb.ConfChangeV2) pb.ConfState {
 	return r.switchToConfig(cfg, prs)
 }
 
+// 传入的参数通常来自于 对ConfState 的resotre，或者对于ConfChange 的apply
+// 函数目的是将本节点的conf 改为使用传入的cfg 参数，并更新内存中的状态，
+// 在删除集群中节点或需要改变多数派的情况下，执行一些额外的动作
 // switchToConfig reconfigures this node to use the provided configuration. It
 // updates the in-memory state and, when necessary, carries out additional
 // actions such as reacting to the removal of nodes or changed quorum
@@ -1714,7 +1730,7 @@ func (r *raft) switchToConfig(cfg tracker.Config, prs tracker.ProgressMap) pb.Co
 	if r.state != StateLeader || len(cs.Voters) == 0 {
 		return cs
 	}
-
+	// r 为leader 时才会尝试commit 及broadcast
 	if r.maybeCommit() {
 		// If the configuration change means that more entries are committed now,
 		// broadcast/append to everyone in the updated config.

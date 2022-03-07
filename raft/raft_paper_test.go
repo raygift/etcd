@@ -399,7 +399,7 @@ func TestLeaderStartReplication(t *testing.T) {
 	r := newTestRaft(1, 10, 1, s)
 	r.becomeCandidate()
 	r.becomeLeader()
-	commitNoopEntry(r, s)
+	commitNoopEntry(r, s) // 将leader 当选后的noop 日志完成提交，commitNoopEntry 中模拟了接收到append 的follower 的响应
 	li := r.raftLog.lastIndex()
 
 	ents := []pb.Entry{{Data: []byte("some data")}}
@@ -904,6 +904,8 @@ func (s messageSlice) Less(i, j int) bool { return fmt.Sprint(s[i]) < fmt.Sprint
 func (s messageSlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 func commitNoopEntry(r *raft, s *MemoryStorage) {
+	r.logger.Infof("%x commitNoopEntry begin", r.id)
+
 	if r.state != StateLeader {
 		panic("it should only be used when it is the leader")
 	}

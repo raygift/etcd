@@ -122,6 +122,8 @@ func (ms *MemoryStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	if hi > ms.lastIndex()+1 {
 		getLogger().Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, ms.lastIndex())
 	}
+	getLogger().Infof("log entries:%v", ms.ents)
+
 	// only contains dummy entries.
 	if len(ms.ents) == 1 {
 		return nil, ErrUnavailable

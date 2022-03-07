@@ -56,6 +56,7 @@ func (u *unstable) maybeLastIndex() (uint64, bool) {
 	if l := len(u.entries); l != 0 {
 		return u.offset + uint64(l) - 1, true
 	}
+	// 不存在unstable entries时
 	if u.snapshot != nil { // 存在unstable snapshot，随后snapshot 将被执行restore，当前
 		return u.snapshot.Metadata.Index, true
 	}
@@ -149,6 +150,7 @@ func (u *unstable) restore(s pb.Snapshot) {
 // -- 在进入truncateAndAppend 之前已经判断了 ents[0].index >= commited+1，因此此处当 ents[0].index <=offset 时，[ents[0].index, 当前offset]区间内都是未提交记录，可以被覆盖，覆盖后offset 向前缩小了，因此要更新
 // 若传入的首条记录的index 大于 offset，[offset，ents[0].index]之间的记录覆盖
 func (u *unstable) truncateAndAppend(ents []pb.Entry) {
+	u.logger.Infof("truncateAndAppend unstable entries %v", u.entries)
 	after := ents[0].Index
 	switch {
 	case after == u.offset+uint64(len(u.entries)): // offset 是相对于 RaftLog 首条记录的偏移量，等式后半部分表示 unstable.entries 的后一条日志的索引号

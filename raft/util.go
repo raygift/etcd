@@ -224,6 +224,8 @@ func limitSize(ents []pb.Entry, maxSize uint64) []pb.Entry {
 	return ents[:limit]
 }
 
+// 若cs1 与cs2 中保存的各个角色的成员编号均相同，则正常返回
+// 否则 panic
 func assertConfStatesEquivalent(l Logger, cs1, cs2 pb.ConfState) {
 	err := cs1.Equivalent(cs2)
 	if err == nil {
