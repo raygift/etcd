@@ -256,6 +256,7 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 }
 
 // 将日志追加写入持久化存储；由上层应用调用（写storage 相关操作都是由上层应用调用的）
+// 此时会处理truncateAndAppend 方法中 unstable.entries 收到的已被持久化日志的重新覆盖问题
 // Append the new entries to storage.
 // TODO (xiangli): ensure the entries are continuous and
 // entries[0].Index > ms.entries[0].Index
@@ -276,17 +277,17 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 	}
 	// truncate compacted entries
 	if first > entries[0].Index {
-		entries = entries[first-entries[0].Index:]
+		entries = entries[first-entries[0].Index:] // 小于firstIndex 的日志已经被压缩，因此将要持久化的entries 中已被压缩的部分截掉丢弃
 	}
 
-	offset := entries[0].Index - ms.ents[0].Index
+	offset := entries[0].Index - ms.ents[0].Index // ms.ents[0] 是dummy entry，记录的Index 是已经被压缩的最后index，此处得到的offset 是将entries 放入ms.ents 的起始位置编号
 	switch {
-	case uint64(len(ms.ents)) > offset:
-		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...)
-		ms.ents = append(ms.ents, entries...)
-	case uint64(len(ms.ents)) == offset:
-		ms.ents = append(ms.ents, entries...)
-	default:
+	case uint64(len(ms.ents)) > offset: // entries 要放置的起始位置编号小于现有ms.ents 的长度，则ms.ents offset 位置及之后的日志将被丢弃，使用entries 中的日志重新填充
+		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...) // 丢弃ms.ents 中与entries 重叠的部分
+		ms.ents = append(ms.ents, entries...)               // 将entries 填充到ms.ents 之后
+	case uint64(len(ms.ents)) == offset: // entries 要防止的起始位置编号等于现有ms.ents 的长度，则与原ms.ents 无缝衔接，直接追加即可
+		ms.ents = append(ms.ents, entries...) // 直接追加
+	default: // entries 要防止的起始位置编号大于现有ms.ents 的长度，意味着将entries 填充到ms.ents 会导致日志空洞；而raft 中不允许日志空洞，因此报告异常
 		getLogger().Panicf("missing log entry [last: %d, append at: %d]",
 			ms.lastIndex(), entries[0].Index)
 	}

@@ -447,6 +447,8 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	term, errt := r.raftLog.term(pr.Next - 1)
 	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
+	r.logger.Infof("%d maybeSendAppend to peer %d pr.Next %d len(ents) %d", r.id, to, pr.Next, len(ents))
+
 	if len(ents) == 0 && !sendIfEmpty { // 要发送的日志记录为空，且sendIfEmpty 标志为false 时，不继续发送日志，返回false
 		return false
 	}
@@ -1024,6 +1026,7 @@ func (r *raft) Step(m pb.Message) error {
 		}
 
 	default:
+		r.logger.Infof("%d step default %+v", r.id, m)
 		err := r.step(r, m)
 		if err != nil {
 			return err

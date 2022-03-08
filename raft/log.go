@@ -203,6 +203,8 @@ func (l *raftLog) unstableEntries() []pb.Entry {
 // If applied is smaller than the index of snapshot, it returns all committed
 // entries after the index of snapshot.
 func (l *raftLog) nextEnts() (ents []pb.Entry) {
+	getLogger().Infof("fi:%d nextEnts[l.applied %d:l.committed+1 %d]", l.firstIndex(), l.applied, l.committed+1)
+
 	off := max(l.applied+1, l.firstIndex())
 	if l.committed+1 > off {
 		ents, err := l.slice(off, l.committed+1, l.maxNextEntsSize)

@@ -158,6 +158,8 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 		// directly append
 		u.entries = append(u.entries, ents...) // 需要append 的日志正好位于 unstable.entries 之后，两部分无缝拼接即可
 	case after <= u.offset: // 传入的日志在RaftLog 中的位置 比unstable.entries 都要靠前，则舍弃当前unstable.entries，将传入日志作为新的unstable.entries，并更新 offset值
+		// after< u.offset 时，说明ents 与已经被持久化到storage 的日志有部分重叠，是否需要考虑用新传入的ents 覆盖这部分已持久化日志？
+		// - 答：需要考虑，但这部分是当unstable entries 被committed 后，放入Ready 结构体传递给上层应用，上层应用将调用rc.raftStorage.Append(rd.Entries) ，覆盖掉已经持久化的部分日志
 		u.logger.Infof("replace the unstable entries from index %d", after)
 		// The log is being truncated to before our current offset
 		// portion, so set the offset and replace the entries
