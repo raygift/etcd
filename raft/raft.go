@@ -1283,7 +1283,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				}
 				r.sendAppend(m.From)
 			}
-		} else { // AppendEntry 请求被接受
+		} else { // AppendEntry 请求未被明确拒绝，但follower committed 可能大于append 过去的index
 			oldPaused := pr.IsPaused()
 			if pr.MaybeUpdate(m.Index) { // 尝试更新pr 的match 与next，并重置Probe 标志用来告知leader 可以继续发送append
 				switch {
@@ -1524,6 +1524,8 @@ func stepFollower(r *raft, m pb.Message) error {
 }
 
 func (r *raft) handleAppendEntries(m pb.Message) {
+	r.logger.Infof("%d r.raftLog.committed %d handleAppendEntries %+v", r.id, r.raftLog.committed, m)
+
 	// 若收到的日志 index 小于当前节点所记录的已提交记录的index，则响应leader 的报文用来告知leader 已完成同步的index 推进到了committed 位置
 	if m.Index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
@@ -1533,7 +1535,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
 	} else {
-		r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
+		r.logger.Infof("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
 			r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
 
 		// Return a hint to the leader about the maximum index and term that the
