@@ -175,11 +175,18 @@ func (pr *Progress) OptimisticUpdate(n uint64) { pr.Next = n + 1 }
 //
 // If the rejection is genuine, Next is lowered sensibly, and the Progress is
 // cleared for sending log entries.
+//
+// 根据follower 所拒绝的 index 和拒绝时提供的 hintIndex 更新节点对应记录的 next
+// 由于当append 的日志顺序错误或重复时，也会导致follower 响应reject，而此时并不需要更新next，因此直接返回false
+// 如果reject 代表了 follower 确实发现了日志冲突（即不是上述顺序错误或重复发送导致），则减小Next，
+// Progress 被清空？
 func (pr *Progress) MaybeDecrTo(rejected, matchHint uint64) bool {
-	if pr.State == StateReplicate {
+	if pr.State == StateReplicate { // 已经处于StateReplicate 状态，说明此节点没有拒绝leader 的appendEntries 请求
+		// 对于此状态的节点，只需根据match 更新 Next 即可
+
 		// The rejection must be stale if the progress has matched and "rejected"
 		// is smaller than "match".
-		if rejected <= pr.Match {
+		if rejected <= pr.Match { // 被reject 的index 已经完成了match，因此无需根据reject 更新 next
 			return false
 		}
 		// Directly decrease next to match + 1.
@@ -189,11 +196,38 @@ func (pr *Progress) MaybeDecrTo(rejected, matchHint uint64) bool {
 		return true
 	}
 
+	// 处于 StateProbe 或 StateSnapshot 状态的节点
+	// 还在尝试找到正确的 Next
+	//
 	// The rejection must be stale if "rejected" does not match next - 1. This
 	// is because non-replicating followers are probed one entry at a time.
-	if pr.Next-1 != rejected {
+	if pr.Next-1 != rejected { // 正常情况下 rejected 即leader 发送AppendEntries 时的m.Index，当时赋值为 next-1；因此若与 next-1 不同，则next 已经更新过，无需再次更新
 		return false
 	}
+	// 取被拒绝的index 原本在 mayAppend() 中被设置为 Next-1，若被拒绝的index < matchHint+1，则 Next = Next -1 ，即 Next 向前退 1 个位置。
+	// 这是StateProbe 状态时每次执行MaybeDecrTo 得到的最小位移
+	// 若 matchHint+1 < 被拒绝的index，则Next 向前的位置肯定大于1
+	// matchHint 的值共经历过两次优化尝试
+	// 第一次优化：在follower 得到append 来的index 后，当决定拒绝时，follower 会尝试找到index 和term 均比append 来的首条日志小或相等的日志，即针对如下情况
+	//   idx        1 2 3 4 5 6 7 8 9
+	//              -----------------
+	//   term (L)   1 3 3 3 3 3 3 3 7
+	//   term (F)   1 3 3 4 4 5 5 5 6
+	// 因为针对同一个index，若follower 的日志term 更大，而由于日志的 term 是单调不减的，因此 follower 中 index 之前所有大于append 来的term 的记录，均与leader 中相同index 的记录冲突
+	// 上图中，当leader 发送index == 9 的记录给follower 时被拒绝，将next 减1 再次尝试发送index==8 的记录同样被拒绝，
+	// 此时因为 leader  index == 8 之前的记录的term一定小于等于3
+	// 因此   follower index == 8 之前，所有term > 3 的记录，均与leader 的冲突
+	// follower 中最后一个term <= 3 的日志是 index == 3 的记录，因此follower 将 3 作为 hintIndex
+
+	// 第二次优化：当leader 得到follower 响应的 hintIndex 后，若hintIndex 的hintTerm < append 到follower 的首条日志的 term，由于可以确定 follower 更小的日志均 <= hintTerm，
+	// 因此leader 中大于hintTerm 的index 处日志均需要同步给follower，如下图所示
+	// leader 尝试向follower 发送 index == 7 的日志，被follower 拒绝，且 hintIndex == 5， hintTerm == 2
+	// leader 便可知道自己日志中 term >2 的日志均需要同步给follower，因此将 index 减小到 term <= 2 的日志位置
+	//   idx        1 2 3 4 5 6 7 8 9
+	//              -----------------
+	//   term (L)   1 3 3 3 5 5 5 5 5
+	//   term (F)   1 1 1 1 2 2
+	//
 
 	pr.Next = max(min(rejected, matchHint+1), 1)
 	pr.ProbeSent = false

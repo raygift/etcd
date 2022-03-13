@@ -481,7 +481,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
 	} else { // 正常获取到了待发送的日志记录和term，准备消息m 并尝试执行发送
 		m.Type = pb.MsgApp
-		m.Index = pr.Next - 1
+		m.Index = pr.Next - 1 // 注意 m.Index 记录了要发送的首条日志的index-1，这个值会在follower 发送reject 时被用来判断 conflictIndex
 		m.LogTerm = term
 		m.Entries = ents
 		m.Commit = r.raftLog.committed
@@ -1179,6 +1179,8 @@ func stepLeader(r *raft, m pb.Message) error {
 			r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
 				r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
 			nextProbeIdx := m.RejectHint
+			// m.LogTerm 若为0，则说明 follower 不存在任何与leader 一致的日志
+			// 否则，follower 与 leader 存在一致的日志，需要继续判断下一次尝试发送哪一部分日志
 			if m.LogTerm > 0 {
 				// If the follower has an uncommitted log tail, we would end up
 				// probing one by one until we hit the common prefix.
@@ -1276,7 +1278,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				//    log.
 				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
 			}
-			if pr.MaybeDecrTo(m.Index, nextProbeIdx) {
+			if pr.MaybeDecrTo(m.Index, nextProbeIdx) { // 缩小next 值；若
 				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
 				if pr.State == tracker.StateReplicate {
 					pr.BecomeProbe()
