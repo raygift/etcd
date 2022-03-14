@@ -428,14 +428,18 @@ func (r *raft) sendAppend(to uint64) {
 	r.logger.Infof("%d maybeSendAppend to %d", r.id, to)
 }
 
-// 必要时，向指定 peer 发送最新的日志记录
-// sendIfEmpty 用来表明要发送的是否为空日志记录
-// （在仅更新已提交index 号时，空消息是很有用的，但在批量发送多条消息时不需要空消息）
 // maybeSendAppend sends an append RPC with new entries to the given peer,
 // if necessary. Returns true if a message was sent. The sendIfEmpty
 // argument controls whether messages with no entries will be sent
 // ("empty" messages are useful to convey updated Commit indexes, but
 // are undesirable when we're sending multiple messages in a batch).
+//
+// 必要时，向指定 peer 发送最新的日志记录
+// sendIfEmpty用来指明是否允许发送包含空日志的消息；
+// （在仅更新已提交index 号时，空消息是很有用的，但在批量发送多条消息时不需要空消息）
+// 疑问：
+// 空日志在仅更新committed 时有用，因为更新committed 时follower 很可能与leader 的日志保持一致，从而Slice 尝试获取要同步日志时返回空
+// 而当批量发送多条日志时，若允许为空有什么问题？
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	pr := r.prs.Progress[to]
@@ -1279,7 +1283,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
 			}
 			if pr.MaybeDecrTo(m.Index, nextProbeIdx) { // 缩小next 值；若
-				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
+				r.logger.Infof("%x decreased progress of %x to [%s]", r.id, m.From, pr)
 				if pr.State == tracker.StateReplicate {
 					pr.BecomeProbe()
 				}
@@ -1311,6 +1315,8 @@ func stepLeader(r *raft, m pb.Message) error {
 					// committed index has progressed for the term, so it is safe
 					// to respond to pending read index requests
 					releasePendingReadIndexMessages(r)
+					r.logger.Infof("%x leader recv MsgAppResp from %x and update Committed to %d, bcast", r.id, m.From, r.raftLog.committed)
+
 					r.bcastAppend()
 				} else if oldPaused {
 					// If we were paused before, this node may be missing the

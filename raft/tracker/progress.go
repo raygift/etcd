@@ -153,7 +153,7 @@ func (pr *Progress) MaybeUpdate(n uint64) bool {
 	if pr.Match < n { // 若n 大于 已知match 的index，则更新 match index
 		pr.Match = n
 		updated = true
-		pr.ProbeAcked() // 重置标志，告知leader 可以继续发送后续append 消息
+		pr.ProbeAcked() // 重置ProbeSent标志，告知leader 可以继续发送后续append 消息
 	}
 	pr.Next = max(pr.Next, n+1)
 	return updated
