@@ -50,7 +50,7 @@ func NewRawNode(config *Config) (*RawNode, error) {
 		raft: r,
 	}
 	rn.prevSoftSt = r.softState()
-	rn.prevHardSt = r.hardState()
+	rn.prevHardSt = r.hardState() // 创建rawNode 时，记录当前hardState，以便后续对hardState 是否有更新进行检查
 	return rn, nil
 }
 
@@ -139,7 +139,7 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 // this call and the prior call to Ready().
 func (rn *RawNode) acceptReady(rd Ready) {
 	if rd.SoftState != nil {
-		rn.prevSoftSt = rd.SoftState
+		rn.prevSoftSt = rd.SoftState // 记录当前soft state，以便之后调用 HasReady() 检查是否有其他Ready 待处理
 	}
 	if len(rd.ReadStates) != 0 {
 		rn.raft.readStates = nil
@@ -154,7 +154,7 @@ func (rn *RawNode) HasReady() bool {
 	if !r.softState().equal(rn.prevSoftSt) {
 		return true
 	}
-	if hardSt := r.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
+	if hardSt := r.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) { // 判断当前raft 的vote\term\committed 是否有更新
 		return true
 	}
 	if r.raftLog.hasPendingSnapshot() {
@@ -172,6 +172,7 @@ func (rn *RawNode) HasReady() bool {
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
+	// 需要记录hardstate ，以便后续判断hasReady
 	if !IsEmptyHardState(rd.HardState) {
 		rn.prevHardSt = rd.HardState
 	}

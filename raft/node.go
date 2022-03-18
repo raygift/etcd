@@ -569,7 +569,7 @@ func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
 		rd.SoftState = softSt
 	}
-	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
+	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) { // 判断当前raft 的hard state 与传入的prevHardSt 相比是否有更新；若有更新则返回的Ready 结构体hardState 非空；否则为emptyHardState
 		rd.HardState = hardSt
 	}
 	if r.raftLog.unstable.snapshot != nil {

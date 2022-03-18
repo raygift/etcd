@@ -747,6 +747,7 @@ func TestRawNodeStart(t *testing.T) {
 		t.Fatal("expected a Ready")
 	}
 	rd := rawNode.Ready()
+	fmt.Printf("rawNode Ready:%v\n", rd)
 	storage.Append(rd.Entries)
 	rawNode.Advance(rd)
 

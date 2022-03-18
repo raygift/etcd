@@ -85,7 +85,7 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 	// if err != nil {
 	// 	panic(err)
 	// }
-	// fmt.Printf("log entries:%v", ents)
+	fmt.Printf("newLog log entries:%v\n", log.unstable.entries)
 
 	return log
 }
@@ -114,8 +114,12 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 			l.append(ents[ci-offset:]...)
 		}
 		l.commitTo(min(committed, lastnewi))
+		getLogger().Infof("MaybeAppend() return true,lasti(%d) for ent %v", lastnewi, ents)
+
 		return lastnewi, true
 	}
+	getLogger().Infof("MaybeAppend() return false for ent %v", ents)
+
 	return 0, false
 }
 
@@ -133,7 +137,7 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	getLogger().Infof("before truncateAndAppend r.lastindex:%d, r.lastterm:%d", l.lastIndex(), l.lastTerm())
 
 	l.unstable.truncateAndAppend(ents) // 将append 的 entries 存入 unstable.entries
-	getLogger().Infof("after truncateAndAppend r.lastindex:%d, r.lastterm:%d", l.lastIndex(), l.lastTerm())
+	getLogger().Infof("after truncateAndAppend r.lastindex:%d, r.lastterm:%d entries:%v", l.lastIndex(), l.lastTerm(), l.unstable.entries)
 
 	return l.lastIndex()
 }

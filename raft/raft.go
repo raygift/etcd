@@ -564,12 +564,15 @@ func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
 func (r *raft) advance(rd Ready) {
 	r.logger.Infof("%x advance", r.id)
 
-	r.reduceUncommittedSize(rd.CommittedEntries)
+	r.reduceUncommittedSize(rd.CommittedEntries) // 减少uncommitted 的数量，记录新增已提交的日志数量
 
 	// If entries were applied (or a snapshot), update our cursor for
 	// the next Ready. Note that if the current HardState contains a
 	// new Commit index, this does not mean that we're also applying
 	// all of the new entries due to commit pagination by size.
+	//
+	// 如果日志已经被应用，则更新游标，以便下次获取Ready 数据
+	// 注意：如果当前的hard state 包含了一个新的提交index，由于commit 被分页，因此不代表所有新的日志已经被应用
 	if newApplied := rd.appliedCursor(); newApplied > 0 {
 		oldApplied := r.raftLog.applied
 		r.raftLog.appliedTo(newApplied)
@@ -592,7 +595,7 @@ func (r *raft) advance(rd Ready) {
 			r.logger.Infof("initiating automatic transition out of joint configuration %s", r.prs.Config)
 		}
 	}
-
+	// Ready 中记录的未持久的日志，已经执行完持久化，这里更新已持久化的index
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
 		r.raftLog.stableTo(e.Index, e.Term)
@@ -788,11 +791,13 @@ func (r *raft) becomeLeader() {
 	r.pendingConfIndex = r.raftLog.lastIndex()
 
 	emptyEnt := pb.Entry{Data: nil}
+	r.logger.Infof("%x before append noopentry at term %d, raftlog entries:%v", r.id, r.Term, r.raftLog.unstable.entries)
+
 	if !r.appendEntry(emptyEnt) {
 		// This won't happen because we just called reset() above.
 		r.logger.Panic("empty entry was dropped")
 	}
-	r.logger.Infof("%x append noopentry at term %d", r.id, r.Term)
+	r.logger.Infof("%x append noopentry at term %d, raftlog entries:%v", r.id, r.Term, r.raftLog.unstable.entries)
 
 	// As a special case, don't count the initial empty entry towards the
 	// uncommitted log quota. This is because we want to preserve the
@@ -1180,7 +1185,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			// which can easily result in hours of time spent probing and can
 			// even cause outright outages. The probes are thus optimized as
 			// described below.
-			r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
+			r.logger.Infof("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
 				r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
 			nextProbeIdx := m.RejectHint
 			// m.LogTerm 若为0，则说明 follower 不存在任何与leader 一致的日志
@@ -1281,6 +1286,8 @@ func stepLeader(r *raft, m pb.Message) error {
 				//    which is at a higher log term than the actually committed
 				//    log.
 				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
+				r.logger.Infof("%x leader findConflict %d with hintIndex %d hintTerm %d", r.id, nextProbeIdx, m.RejectHint, m.LogTerm)
+
 			}
 			if pr.MaybeDecrTo(m.Index, nextProbeIdx) { // 缩小next 值；若
 				r.logger.Infof("%x decreased progress of %x to [%s]", r.id, m.From, pr)
@@ -1339,14 +1346,14 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		}
 	case pb.MsgHeartbeatResp:
-		pr.RecentActive = true
-		pr.ProbeSent = false
+		pr.RecentActive = true // 标识progress 对应的follower 仍是active 的；当选举超时时重置为false
+		pr.ProbeSent = false   // probesent 标识leader 是否在对follower 的匹配日志进行探查，若正在探查中，则需要暂停发送日志
 
 		// free one slot for the full inflights window to allow progress.
 		if pr.State == tracker.StateReplicate && pr.Inflights.Full() {
 			pr.Inflights.FreeFirstOne()
 		}
-		if pr.Match < r.raftLog.lastIndex() {
+		if pr.Match < r.raftLog.lastIndex() { // 判断follower 的日志是否落后
 			r.sendAppend(m.From)
 		}
 
@@ -1561,6 +1568,8 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		if err != nil {
 			panic(fmt.Sprintf("term(%d) must be valid, but got %v", hintIndex, err))
 		}
+		r.logger.Infof("%d handleAppendEntries reject with hintIndex %d", r.id, hintIndex)
+
 		r.send(pb.Message{
 			To:         m.From,
 			Type:       pb.MsgAppResp,

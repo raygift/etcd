@@ -16,6 +16,7 @@ package tracker
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 )
@@ -149,6 +150,8 @@ func (pr *Progress) BecomeSnapshot(snapshoti uint64) {
 // index acked by it. The method returns false if the given n index comes from
 // an outdated message. Otherwise it updates the progress and returns true.
 func (pr *Progress) MaybeUpdate(n uint64) bool {
+	log.Printf("MaybeUpdate() pr.Match %v upto %d", pr.Match, n)
+
 	var updated bool
 	if pr.Match < n { // 若n 大于 已知match 的index，则更新 match index
 		pr.Match = n
