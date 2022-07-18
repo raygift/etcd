@@ -94,31 +94,39 @@ func (l *raftLog) String() string {
 	return fmt.Sprintf("committed=%d, applied=%d, unstable.offset=%d, len(unstable.Entries)=%d", l.committed, l.applied, l.unstable.offset, len(l.unstable.entries))
 }
 
-// MaybeAppend 只用在 handleAppendEntries() 时，用来判断传入的 m.entries 是否可以被append，若可以则将传入的entries 添加到unstable.entries 中
-// 若传入的 m.Index 和 m.LogTerm 与RaftLog 中对应 [index,term] 存在冲突，则无需判断 m.Entries，直接返回false，表示无法append
-// 否则，判断传入的 m.Entries 与 RaftLog 位置关系
+// MaybeAppend 只用在 handleAppendEntries() 时，用来判断传入的 m.entries 是否可以被append，
+// 若可以则将传入的entries 添加到unstable.entries 中；
+// 其中入参 index 的值是 leader 根据记录的节点日志匹配情况[match,next] 得到的 next-1 值，
+// 入参 term 为 next-1 对应的日志term
+// 而入参 ents 的首条日志编号为 next；
+// 这里 index、term 与 ents 首条日志不一致的原因是，index 与 term 是为了检查 next 之前的日志是否已经匹配
+// 若传入的 m.Index 和 m.LogTerm 与RaftLog 中对应 [index,term] 存在冲突，则不能确定节点与leader 最后一条匹配的日志编号
+// 需要执行探查得到不匹配的开始位置，因此直接返回false，表示本次无法append；
+// 否则说明 next 位置之前的日志均匹配，只需要将 m.Entries 追加或覆盖到 RaftLog 对应位置
 // maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
 // it returns (last index of new entries, true).
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
-	// 首先判断传入的 term 与logTerm 是否与RaftLog 存在冲突；若存在冲突则没有必要继续判断，直接返回false
-	if l.matchTerm(index, logTerm) { // index 参数为 ents 的首条日志的index
-		// 传入的 term 与 logTerm 与RaftLog 不存在冲突，检查可以append 的日志
+	// 根据leader 所记录的[match,next]中的next 值，判断 next-1 处的日志是否匹配
+	if l.matchTerm(index, logTerm) {
+		// 确定 next 是正确的待同步日志起始位置，next 之前的日志已经匹配
+		// 进一步判断next 之后，当前节点是否已存在日志，若存在需要被leader 的日志覆盖
 		lastnewi = index + uint64(len(ents)) // lastnewi 为传入的ents 的最后一条日志的index
-		ci := l.findConflict(ents)
+		ci := l.findConflict(ents)           // （使用ents 而非m.Index/term) 判断当前节点是否已有与leader 冲突的日志，若存在需要使用传入的ents 进行覆盖
 		switch {
-		case ci == 0: // 不存在日志冲突，且 RaftLog 中已包含所有传入的ents，无需特殊处理，RaftLog 的 committed 将可能被更新
-		case ci <= l.committed: // 存在冲突，且冲突的位置位于已提交日志之前，违背了Raft 论文中已提交日志不能被修改的安全性约束
+		case ci == 0: // 当前节点已持有ents 中所有记录，RaftLog 的 committed 将可能被更新
+		case ci <= l.committed: // 当前节点 [next,...] 中存在与leader 不同的日志，且冲突的位置位于已提交日志之前，违背了Raft 论文中已提交日志不能被修改的安全性约束
 			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed) // 这里一定要 panic 吗？其他网络分区的旧leader 很可能会发送冲突的entries，此时follower 拒绝append 不就可以了？
-		default: // ci 大于已提交日志位置，说明传入的ents 中存在 RaftLog 尚未持有的新日志
-			offset := index + 1 // 为了ci-offset 与ents 中日志位置对应
-			l.append(ents[ci-offset:]...)
+		default: // 当前节点未持有所有 ents 中的日志，且未持有日志index>committed，此时需要将传入的ents 中未持有的部分追加到RaftLog 中（即使有些index 已有日志，但与leader 传来的ents 不同，需要用leader 的日志覆盖）
+			offset := index + 1           // 因为 index 为 next-1，而ents 首条日志index 为next，offset可得到ents[0] 的index，为了ci-offset 与ents 中日志位置对应
+			l.append(ents[ci-offset:]...) // 将ents ci 之后的日志追加到当前节点的 RaftLog，覆盖 RaftLog 冲突日志的操作在append 中由 truncateAndAppend 具体完成
 		}
 		l.commitTo(min(committed, lastnewi))
 		getLogger().Infof("MaybeAppend() return true,lasti(%d) for ent %v", lastnewi, ents)
 
 		return lastnewi, true
 	}
-	getLogger().Infof("MaybeAppend() return false for ent %v", ents)
+	// 节点日志与leader 记录的 next-1 处的日志不匹配，需要后续执行探查找到不匹配日志的最小index
+	getLogger().Infof("MaybeAppend() return false so need more probes, conflict index %d", index)
 
 	return 0, false
 }

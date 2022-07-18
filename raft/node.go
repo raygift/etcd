@@ -123,6 +123,8 @@ func (rd Ready) appliedCursor() uint64 {
 }
 
 // Node represents a node in a raft cluster.
+// Node 接口被etcdserver 的 raftNode 接口体匿名嵌套
+// 因此 etcdserver 的raftNode 可以调用Node 接口中的方法
 type Node interface {
 	// Tick increments the internal logical clock for the Node by a single tick. Election
 	// timeouts and heartbeat timeouts are in units of ticks.
@@ -254,6 +256,7 @@ type msgWithResult struct {
 }
 
 // node is the canonical implementation of the Node interface
+// node 是Node 接口的标准实现
 type node struct {
 	propc      chan msgWithResult
 	recvc      chan pb.Message
@@ -409,9 +412,11 @@ func (n *node) run() {
 
 // Tick increments the internal logical clock for this Node. Election timeouts
 // and heartbeat timeouts are in units of ticks.
-func (n *node) Tick() { //func (rc *raftNode) serveChannels() 会设置定时触发，持续调用Tick()
+//raftexampel 中在func (rc *raftNode) serveChannels() 会设置定时触发，持续调用Tick()；
+// etcdserver 中func (r *raftNode) start(rh *raftReadyHandler) 会在收到timer.Ticker channel 定时发出的信号时触发
+func (n *node) Tick() {
 	select {
-	case n.tickc <- struct{}{}:
+	case n.tickc <- struct{}{}: // 向tickc 中发送消息，驱动 func (n *node) run() { 中执行 rawNode 的Tick()  n.rn.Tick()
 	case <-n.done:
 	default:
 		n.rn.raft.logger.Warningf("%x A tick missed to fire. Node blocks too long!", n.rn.raft.id)

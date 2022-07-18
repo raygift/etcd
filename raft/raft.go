@@ -449,8 +449,8 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	m := pb.Message{}
 	m.To = to
 
-	term, errt := r.raftLog.term(pr.Next - 1)
-	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
+	term, errt := r.raftLog.term(pr.Next - 1)              // term 使用 Next-1
+	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize) // 为何 entries 使用 Next 开始，而不是与term 保持一致使用 Next-1？
 	r.logger.Infof("%d maybeSendAppend to peer %d pr.Next %d len(ents) %d", r.id, to, pr.Next, len(ents))
 
 	if len(ents) == 0 && !sendIfEmpty { // 要发送的日志记录为空，且sendIfEmpty 标志为false 时，不继续发送日志，返回false
@@ -486,8 +486,8 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	} else { // 正常获取到了待发送的日志记录和term，准备消息m 并尝试执行发送
 		m.Type = pb.MsgApp
 		m.Index = pr.Next - 1 // 注意 m.Index 记录了要发送的首条日志的index-1，这个值会在follower 发送reject 时被用来判断 conflictIndex
-		m.LogTerm = term
-		m.Entries = ents
+		m.LogTerm = term      // 与m.Index 一致，均为 Next-1 处的日志
+		m.Entries = ents      // 与m.Index 和 m.Term 有区别，是从 Next 处开始的日志
 		m.Commit = r.raftLog.committed
 		if n := len(m.Entries); n != 0 {
 			switch pr.State {

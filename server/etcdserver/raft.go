@@ -72,6 +72,7 @@ type apply struct {
 	notifyc chan struct{}
 }
 
+// raftNode 作为调用Raft 算法的入口，使用结构体中嵌套匿名接口实现了对 RaftNode 方法的字段提升
 type raftNode struct {
 	lg *zap.Logger
 
